@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="header">
+        <h2 id="txt-title">YT Music Organizer</h2>
+        <div class="lang-switch">
+            <span id="btn-en" class="lang-btn active">🇺🇸</span>
+            <span id="btn-pt" class="lang-btn">🇧🇷</span>
+        </div>
+    </div>
+
+    <div class="settings-container">
+        
+        <div class="setting-item">
+            <div class="setting-label">
+                <span class="title" id="txt-warn-title">Safety Warning</span>
+                <span class="desc" id="txt-warn-desc">Confirm before sorting</span>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="check-show-warn" checked>
+                <span class="slider round"></span>
+            </label>
+        </div>
+
+        <hr>
+
+        <div class="advanced-section">
+            <div class="section-title" id="txt-lfm-title">Last.fm Integration</div>
+            <div class="api-input-container">
+                <span class="desc" id="txt-lfm-desc">Fill in to use "My Scrobbles":</span>
+                
+                <div class="input-group">
+                    <label id="txt-lbl-key">API Key</label>
+                    <input type="text" id="lastfm-key" class="input-text">
+                </div>
+
+                <div class="input-group">
+                    <label id="txt-lbl-user">Username</label>
+                    <input type="text" id="lastfm-user" class="input-text">
+                </div>
+                
+                <div class="footer-api">
+                    <div id="save-status" class="status-msg"></div>
+                    <a href="https://www.last.fm/api/account/create" target="_blank" class="link" id="txt-link-key">Get API Key</a>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="footer">
+        <a href="mailto:levi.raniere@gmail.com" class="bug-report" id="txt-bug">Report Bug</a>
+        <div class="version">v0.1</div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

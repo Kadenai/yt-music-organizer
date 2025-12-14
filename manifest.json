@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "YT Music Organizer",
+  "version": "1.0",
+  "description": "Organize suas playlists do YT Music com critérios avançados (Álbum, Popularidade, Scrobbles e mais).",
+  "default_locale": "en",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://music.youtube.com/*"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "ytmusicorganizer@leviraniere",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "YT Music Organizer"
+  },
+  "icons": {
+    "48": "icon.svg",
+    "128": "icon.svg"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://music.youtube.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "utils.js",
+        "main.js",
+        "sorters/title.js",
+        "sorters/artist.js",
+        "sorters/duration.js",
+        "sorters/popularity.js",
+        "sorters/scrobbles.js",
+        "sorters/album.js",
+        "styles.css",
+        "icon.svg"
+      ],
+      "matches": ["*://music.youtube.com/*"]
+    }
+  ]
+}
