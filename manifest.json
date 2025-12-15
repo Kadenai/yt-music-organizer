@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YT Music Organizer",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Organize suas playlists do YT Music com critérios avançados (Álbum, Popularidade, Scrobbles e mais).",
   "default_locale": "en",
   "permissions": [

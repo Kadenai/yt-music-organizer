@@ -1,149 +1,127 @@
-// utils.js - A Fundação e Namespace Global (v4.0 - Performance Engine)
+// utils.js - Versão 5.0 (Header Parser V3 - Compatible with Editable Playlists)
 
 window.YTM = window.YTM || {};
 
-// Configurações Globais Ajustadas para Performance
 window.YTM.config = {
-    BATCH_SIZE: 50,        // Reduzi o lote de salvamento para evitar travamentos na UI do YouTube
-    DELAY_BATCH: 100,      // Pausa entre lotes de salvamento
+    BATCH_SIZE: 50,
+    DELAY_BATCH: 100,
     DELAY_SCROLL: 2000,
-    CONCURRENCY_LIMIT: 3,  // Máximo de requisições simultâneas (Semaforo)
-    CACHE_TTL_HOURS: 72    // Cache dura 3 dias
+    CONCURRENCY_LIMIT: 3,
+    CACHE_TTL_HOURS: 72
 };
 
-// ============================================================================
-// 1. SISTEMA DE CACHE PERSISTENTE (NOVO)
-// ============================================================================
+// --- CACHE & QUEUE (Mantidos iguais) ---
 window.YTM.Cache = {
     prefix: 'YTM_ORG_V1_',
-
     get: (key) => {
         try {
             const record = localStorage.getItem(window.YTM.Cache.prefix + key);
             if (!record) return null;
-            
             const parsed = JSON.parse(record);
-            // Verifica validade
             if (Date.now() > parsed.expiry) {
                 localStorage.removeItem(window.YTM.Cache.prefix + key);
                 return null;
             }
             return parsed.data;
-        } catch (e) {
-            return null;
-        }
+        } catch (e) { return null; }
     },
-
     set: (key, data) => {
         try {
             const expiry = Date.now() + (window.YTM.config.CACHE_TTL_HOURS * 60 * 60 * 1000);
-            const record = { data: data, expiry: expiry };
-            localStorage.setItem(window.YTM.Cache.prefix + key, JSON.stringify(record));
-        } catch (e) {
-            // Se o storage encher, limpa tudo e tenta de novo (Garbage Collection brutal)
-            console.warn("[YTM Cache] Storage cheio. Limpando cache antigo...");
-            window.YTM.Cache.clearAll();
-        }
+            localStorage.setItem(window.YTM.Cache.prefix + key, JSON.stringify({ data, expiry }));
+        } catch (e) { window.YTM.Cache.clearAll(); }
     },
-
     clearAll: () => {
-        Object.keys(localStorage).forEach(key => {
-            if (key.startsWith(window.YTM.Cache.prefix)) {
-                localStorage.removeItem(key);
-            }
-        });
+        Object.keys(localStorage).forEach(k => { if(k.startsWith(window.YTM.Cache.prefix)) localStorage.removeItem(k); });
     }
 };
 
-// ============================================================================
-// 2. SISTEMA DE FILA (THROTTLING) (NOVO)
-// ============================================================================
-// Garante que o navegador não congele com excesso de requisições
 window.YTM.Queue = {
-    activeCount: 0,
-    queue: [],
-    
-    // Adiciona uma tarefa (função que retorna Promise) à fila
+    activeCount: 0, queue: [],
     add: (taskFn) => {
         return new Promise((resolve, reject) => {
             window.YTM.Queue.queue.push({ taskFn, resolve, reject });
             window.YTM.Queue.next();
         });
     },
-
     next: () => {
-        // Se já tem gente demais rodando ou fila vazia, para.
-        if (window.YTM.Queue.activeCount >= window.YTM.config.CONCURRENCY_LIMIT || window.YTM.Queue.queue.length === 0) {
-            return;
-        }
-
+        if (window.YTM.Queue.activeCount >= window.YTM.config.CONCURRENCY_LIMIT || window.YTM.Queue.queue.length === 0) return;
         window.YTM.Queue.activeCount++;
         const { taskFn, resolve, reject } = window.YTM.Queue.queue.shift();
-
-        // Executa a tarefa
-        taskFn()
-            .then(resolve)
-            .catch(reject)
-            .finally(() => {
-                window.YTM.Queue.activeCount--;
-                // Dá um "respiro" minúsculo para a UI não travar antes do próximo
-                setTimeout(window.YTM.Queue.next, 5); 
-            });
+        taskFn().then(resolve).catch(reject).finally(() => {
+            window.YTM.Queue.activeCount--;
+            setTimeout(window.YTM.Queue.next, 5); 
+        });
     },
-
-    // Limpa a fila (útil para o botão STOP)
-    clear: () => {
-        window.YTM.Queue.queue = [];
-    }
+    clear: () => { window.YTM.Queue.queue = []; }
 };
 
-// ============================================================================
-// 3. FERRAMENTAS COMUNS (TEXTO E TEMPO)
-// ============================================================================
 window.YTM.Common = {
-    // Yield: Pausa a execução para deixar a UI responder (botão parar, spinner, etc)
     yield: () => new Promise(resolve => setTimeout(resolve, 0)),
-
-    cleanText: (text) => {
-        if (!text) return "";
-        return text.toLowerCase()
-            .replace(/\(official video\)/g, '').replace(/\(official audio\)/g, '')
-            .replace(/\(lyrics\)/g, '').replace(/\[.*?\]/g, '')
-            .replace(/\(.*?ver.*?\)/g, '').replace(/\(.*?remaster.*?\)/g, '')
-            .trim();
-    },
+    cleanText: (text) => text ? text.toLowerCase().replace(/\(official video\)/g, '').replace(/\(lyrics\)/g, '').trim() : "",
     createCanonicalId: (text) => {
         if (!text) return "";
         let clean = window.YTM.Common.cleanText(text);
-        clean = clean.replace(/\((feat|ft|part|with).*?\)/g, '').replace(/\[(feat|ft|part|with).*?\]/g, '');
         clean = clean.split(/\s(?:feat\.|ft\.|part\.|with)\s/)[0];
         return clean.replace(/[^a-z0-9]/g, '');
     },
     parseDuration: (text) => {
         if (!text) return 0;
         const parts = text.split(':').map(Number);
-        if (parts.length === 2) return parts[0] * 60 + parts[1];
-        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-        return 0;
+        return parts.length === 2 ? parts[0] * 60 + parts[1] : (parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : 0);
     }
 };
 
-// ============================================================================
-// 4. PARSER (LEITURA DO DOM DO YOUTUBE)
-// ============================================================================
+// --- PARSER ATUALIZADO ---
 window.YTM.Parser = {
     getTotalPlaylistCount: () => {
         try {
-            const subtitle = document.querySelector('ytmusic-responsive-header-renderer .second-subtitle');
+            // Lista de possíveis locais onde o YouTube esconde o contador
+            const selectors = [
+                // 1. Playlists Editáveis (Sua imagem)
+                'ytmusic-editable-playlist-detail-header-renderer .second-subtitle-container .second-subtitle',
+                // 2. Playlists de Terceiros / Álbuns
+                'ytmusic-responsive-header-renderer .second-subtitle-container .second-subtitle',
+                // 3. Fallback genérico
+                '.second-subtitle'
+            ];
+
+            let subtitle = null;
+            for (let sel of selectors) {
+                subtitle = document.querySelector(sel);
+                if (subtitle) break;
+            }
+
             if (!subtitle) return null;
+
+            // Pega todo o texto (incluindo spans filhos)
+            // Ex: "Playlist • 2025 • 497 itens • Mais de 9 horas"
             const text = subtitle.textContent;
+            
+            // Quebra por separadores comuns do YouTube
             const parts = text.split(/[•·]/); 
+
             for (let part of parts) {
                 part = part.trim();
+                
+                // 1. Ignora Duração (tem ':', 'hora', 'min', 'sec')
                 if (part.match(/(\d+:|hora|hour|min|sec)/i)) continue;
+
+                // 2. Ignora Ano (4 dígitos, começa com 19 ou 20)
                 if (part.match(/^(19|20)\d{2}$/)) continue;
+
+                // 3. Ignora palavras chaves de tipo
+                if (part.match(/^(playlist|album|single|ep)$/i)) continue;
+
+                // 4. Extrai números
                 const numStr = part.replace(/\D/g, '');
-                if (numStr && numStr.length > 0) return parseInt(numStr, 10);
+                
+                // Se sobrou um número, é a quantidade de itens!
+                if (numStr && numStr.length > 0) {
+                    const num = parseInt(numStr, 10);
+                    // Filtro de sanidade: playlists raramente tem 0 ou números absurdos como ano
+                    if (num > 0 && num < 100000) return num;
+                }
             }
             return null;
         } catch (e) { return null; }
