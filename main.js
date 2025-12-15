@@ -1,8 +1,8 @@
-// main.js - Versão 7.0 (Emergency Stop & Abort Logic)
+// main.js - Versão 9.0 (Persistent Scroller)
 
 (function() {
 
-    let isCancelled = false; // Bandeira de Cancelamento Global
+    let isCancelled = false; 
 
     const FUSION_STRATEGIES = {
         'FUS_FAV_ALBUMS': { type: 'GROUP_BY_ALBUM', scoreFn: (t) => t.reduce((s, x) => s + (Number(x.userPlays)||0), 0), descending: true },
@@ -44,21 +44,26 @@
                 key: key,
                 tracks: tracks,
                 score: strategy.scoreFn ? strategy.scoreFn(tracks) : 0,
-                artistName: tracks[0].artista, 
+                artistName: tracks[0].artistaOriginal || tracks[0].artista, 
+                albumName: tracks[0].album || "",
                 year: tracks[0].year || 9999
             };
         });
 
         groupList.sort((a, b) => {
             if (strategy.specialSort === 'DISCOGRAPHY') {
-                const artistCompare = a.artistName.localeCompare(b.artistName);
-                if (artistCompare !== 0) return artistCompare;
-                return a.year - b.year;
+                const artA = a.artistName.toLowerCase();
+                const artB = b.artistName.toLowerCase();
+                if (artA < artB) return -1;
+                if (artA > artB) return 1;
+                if (a.year !== b.year) return a.year - b.year;
+                return a.albumName.localeCompare(b.albumName);
             }
             const diff = strategy.descending ? (b.score - a.score) : (a.score - b.score);
             if (diff !== 0) return diff;
             return a.artistName.localeCompare(b.artistName);
         });
+
         return groupList.flatMap(g => g.tracks);
     }
 
@@ -75,22 +80,25 @@
         });
     }
 
+    // --- SCROLLER PERSISTENTE ---
     async function realizarScrollCompleto() {
         const metaTotal = window.YTM.Parser.getTotalPlaylistCount();
         let currentCount = 0;
         let retries = 0;
-        const MAX_RETRIES = 5;
+        // Se temos uma meta, tentamos mais vezes. Se não, desistimos mais rápido.
+        const MAX_RETRIES = metaTotal ? 15 : 5; 
 
         window.YTM.UI.update("Carregando...", "Analisando tamanho da playlist...");
         
         while (true) {
-            // CHECKPOINT DE PARADA
             if (isCancelled) return false;
 
+            // Conta apenas os itens REAIS de música (ignora headers/dividers)
             currentCount = document.querySelectorAll('ytmusic-responsive-list-item-renderer').length;
 
             if (metaTotal) {
                  window.YTM.UI.update("Carregando...", `${currentCount} / ${metaTotal} itens...`);
+                 // Se passamos da meta (ghost tracks) ou chegamos nela, para.
                  if (currentCount >= metaTotal) break;
             } else {
                  window.YTM.UI.update("Carregando...", `${currentCount} itens...`);
@@ -103,12 +111,25 @@
             
             if (newCount === currentCount) {
                 retries++;
-                window.scrollBy(0, -500);
-                await new Promise(r => setTimeout(r, 500));
-                window.scrollTo(0, document.documentElement.scrollHeight);
-                if (retries >= MAX_RETRIES) break;
+                
+                // Se tem Meta e ainda não chegou, faz um "Super Wiggle" (sobe mais)
+                if (metaTotal && currentCount < metaTotal) {
+                    window.scrollBy(0, -1000); // Sobe bastante
+                    await new Promise(r => setTimeout(r, 800));
+                    window.scrollTo(0, document.documentElement.scrollHeight); // Desce tudo
+                } else {
+                    // Wiggle normal
+                    window.scrollBy(0, -300);
+                    await new Promise(r => setTimeout(r, 500));
+                    window.scrollTo(0, document.documentElement.scrollHeight);
+                }
+
+                if (retries >= MAX_RETRIES) {
+                    console.warn(`[YTM] Scroll desistiu. Meta: ${metaTotal}, Atual: ${currentCount}`);
+                    break;
+                }
             } else {
-                retries = 0;
+                retries = 0; // Reset se achou algo novo
             }
         }
         return true;
@@ -123,11 +144,14 @@
         const tot = Math.ceil(lista.length / window.YTM.config.BATCH_SIZE);
 
         for (let i=0; i<lista.length; i+=window.YTM.config.BATCH_SIZE) {
-            // CHECKPOINT DE PARADA
             if (isCancelled) { window.YTM.UI.send('UI_STOPPED'); return; }
 
             const ch = lista.slice(i, i+window.YTM.config.BATCH_SIZE);
             window.YTM.UI.update("Salvando...", `Lote ${Math.floor(i/window.YTM.config.BATCH_SIZE)+1}/${tot}`);
+            
+            // Fila de Throttling para envio também? Opcional, mas seguro.
+            // Por enquanto, mantemos delay simples que funciona bem.
+            
             let acts = [];
             for (let m of ch) { 
                 if (m.id === t) continue; 
@@ -145,16 +169,19 @@
                 } catch(e){} 
                 await new Promise(r => setTimeout(r, window.YTM.config.DELAY_BATCH)); 
             }
+            
+            // Yield para UI
+            await window.YTM.Common.yield();
         }
         window.YTM.UI.success();
     }
 
     async function iniciarProcesso(modes, isReverse, creds) {
         try {
-            isCancelled = false; // Reset da bandeira
+            isCancelled = false; 
+            window.YTM.Queue.clear(); // Limpa fila antiga se houver
             window.YTM.UI.send('UI_START');
             
-            // 1. Scroll
             const scrollOk = await realizarScrollCompleto();
             if (!scrollOk && isCancelled) { window.YTM.UI.send('UI_STOPPED'); return; }
 
@@ -191,14 +218,11 @@
 
             let falhas = 0;
             for (const sorter of activeSorters) {
-                // CHECKPOINT DE PARADA ENTRE CADA ETAPA
                 if (isCancelled) { window.YTM.UI.send('UI_STOPPED'); return; }
-                
                 const f = await sorter.enrich(lista, creds);
                 if (f) falhas += f;
             }
 
-            // Ultima checagem antes de ordenar
             if (isCancelled) { window.YTM.UI.send('UI_STOPPED'); return; }
 
             window.YTM.UI.update("Ordenando...", "Calculando nova ordem...");
@@ -211,7 +235,6 @@
 
             if (!isReverse) lista.reverse();
 
-            // Salvar (Checkpoints internos)
             await enviarParaYouTube(lista, topId, renderer.data.playlistId);
 
         } catch (err) {
@@ -222,14 +245,12 @@
 
     window.addEventListener("message", (ev) => {
         if (ev.origin !== window.location.origin) return;
-        
         if (ev.data && ev.data.type === "CMD_START_SORT") {
             iniciarProcesso(ev.data.modes, ev.data.reverse, ev.data.creds);
         }
-        
         if (ev.data && ev.data.type === "CMD_STOP_SORT") {
-            console.log("[YTM] Sinal de Parada recebido.");
             isCancelled = true;
+            window.YTM.Queue.clear(); // Esvazia fila de requests imediatamente
         }
     });
 
