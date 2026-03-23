@@ -3,16 +3,29 @@
 (function() {
     // Funções Auxiliares Internas
     
-    // API 1: Last.fm Top Tracks
+    // Normalize title to increase match rate
+    function normalizeTitle(text) {
+        if (!text) return "";
+        let clean = text.toLowerCase();
+        // Remove parens and brackets and their contents (e.g., "(Live)", "[Official Audio]")
+        clean = clean.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '');
+        // Remove common suffixes after hyphens
+        clean = clean.replace(/\s+-\s+(live|remaster|remastered|bonus|acoustic).*/gi, '');
+        // Remove feats
+        clean = clean.split(/\s(?:feat\.|ft\.|part\.|with)\s/)[0];
+        // Strip everything but letters and numbers
+        return clean.replace(/[^a-z0-9]/g, '');
+    }
+
+    // API 1: Last.fm Top Tracks (Fazemos o cache das top 1000 músicas do artista)
     async function fetchArtistTopTracks(artistName, apiKey) {
         try {
-            const url = `https://ws.audioscrobbler.com/2.0/?method=artist.gettoptracks&artist=${encodeURIComponent(artistName)}&api_key=${apiKey}&format=json&limit=200&autocorrect=1`;
+            const url = `https://ws.audioscrobbler.com/2.0/?method=artist.gettoptracks&artist=${encodeURIComponent(artistName)}&api_key=${apiKey}&format=json&limit=1000&autocorrect=1`;
             const response = await fetch(url);
             const json = await response.json();
             if (json.toptracks && json.toptracks.track) {
-                // Mapeia para um formato fácil de buscar
                 return json.toptracks.track.map(t => ({
-                    canonical: window.YTM.Common.createCanonicalId(t.name), 
+                    canonical: normalizeTitle(t.name), 
                     listeners: parseInt(t.listeners)
                 }));
             }
@@ -47,27 +60,34 @@
                 const hasKey = creds && creds.key;
                 
                 if (hasKey) {
-                    // --- MODO LAST.FM (RÁPIDO) ---
-                    const artistasUnicos = [...new Set(listaMusicas.map(m => m.artistaOriginal))];
+                    // --- MODO LAST.FM (TOP 1000 TRACKS) ---
+                    const artistasUnicos = [...new Set(listaMusicas.map(m => m.artistaOriginal || m.artista))];
                     const cacheTopTracks = {};
 
-                    // 1. Busca Top Tracks de cada artista
+                    // 1. Busca Top 1000 Tracks de cada artista para um índice incrivelmente preciso
                     for (let i = 0; i < artistasUnicos.length; i++) {
-                        const artista = artistasUnicos[i];
-                        window.YTM.UI.update("Last.fm...", `Top Tracks: ${artista}`);
-                        cacheTopTracks[window.YTM.Common.cleanText(artista)] = await fetchArtistTopTracks(artista, creds.key);
-                        // Pequeno delay para ser gentil com a API
+                        let artista = artistasUnicos[i];
+                        if (artista.includes(" • ")) artista = artista.split(" • ")[0].trim();
+                        
+                        window.YTM.UI.update("Last.fm...", `Analisando artista: ${artista}`);
+                        cacheTopTracks[artista] = await fetchArtistTopTracks(artista, creds.key);
+                        // Pequeno delay
                         await new Promise(r => setTimeout(r, 200));
                     }
 
-                    // 2. Associa dados às músicas
+                    // 2. Associa dados às músicas usando um normalizador robusto
                     for (let musica of listaMusicas) {
-                        const topList = cacheTopTracks[window.YTM.Common.cleanText(musica.artistaOriginal)] || [];
-                        // Tenta encontrar a música na lista top do artista
-                        const match = topList.find(t => t.canonical === musica.canonical);
+                        let artista = musica.artistaOriginal || musica.artista || "";
+                        if (artista.includes(" • ")) artista = artista.split(" • ")[0].trim();
+                        
+                        const topList = cacheTopTracks[artista] || [];
+                        const canonicalLocal = normalizeTitle(musica.tituloOriginal || musica.titulo);
+                        
+                        // Tenta encontrar a música na lista de 1000 top do artista
+                        const match = topList.find(t => t.canonical === canonicalLocal);
                         
                         musica.views = match ? match.listeners : 0;
-                        if (match) musica.source = "Last.fm Top";
+                        if (match) musica.source = "Last.fm Top 1000";
                     }
 
                 } else {

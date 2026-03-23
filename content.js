@@ -155,9 +155,9 @@ if (typeof chrome !== "undefined" && chrome.storage) {
     chrome.storage.sync.get(['showWarning', 'lastFmKey', 'lastFmUser', 'appLang'], (result) => {
         if (result.showWarning !== undefined) config.showWarning = result.showWarning;
         window.LASTFM_CREDS = { key: result.lastFmKey || "", user: result.lastFmUser || "" };
-        currentLang = result.appLang || 'en';
-        
-        renderModalTexts(); 
+        currentLang = result.appLang || (navigator.language.startsWith('pt') ? 'pt' : 'en');
+
+        renderModalTexts();
         atualizarTextoBotao();
         monitorarPagina();
     });

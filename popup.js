@@ -39,8 +39,10 @@ document.addEventListener('DOMContentLoaded', () => {
         let savedLang = res.appLang;
         if (!savedLang) {
             savedLang = navigator.language.startsWith('pt') ? 'pt' : 'en';
+            chrome.storage.sync.set({ appLang: savedLang });
+            sendMessage({ type: 'UPDATE_LANG', lang: savedLang });
         }
-        
+
         applyLanguageToUI(savedLang);
     });
 
@@ -84,27 +86,43 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let timeout = null;
     const saveText = () => {
-        clearTimeout(timeout);
+        const k = inputKey.value.trim();
+        const u = inputUser.value.trim();
+
         statusMsg.innerText = TEXTS[currentLang].saving;
         statusMsg.style.color = "#aaa";
-        
-        timeout = setTimeout(() => {
-            const k = inputKey.value.trim();
-            const u = inputUser.value.trim();
-            
-            chrome.storage.sync.set({ lastFmKey: k, lastFmUser: u }, () => {
+
+        if (typeof browser !== 'undefined' && browser.storage) {
+            browser.storage.sync.set({ lastFmKey: k, lastFmUser: u }).then(() => {
                 statusMsg.innerText = TEXTS[currentLang].saved;
                 statusMsg.style.color = "#4bb71b";
                 setTimeout(() => statusMsg.innerText = "", 2000);
                 sendMessage({ type: 'UPDATE_CREDS', key: k, user: u });
             });
-        }, 800);
+        } else {
+            chrome.storage.sync.set({ lastFmKey: k, lastFmUser: u }, () => {    
+                statusMsg.innerText = TEXTS[currentLang].saved;
+                statusMsg.style.color = "#4bb71b";
+                setTimeout(() => statusMsg.innerText = "", 2000);
+                sendMessage({ type: 'UPDATE_CREDS', key: k, user: u });
+            });
+        }
     };
 
-    inputKey.addEventListener('input', saveText);
-    inputUser.addEventListener('input', saveText);
+    const debouncedSaveText = () => {
+        clearTimeout(timeout);
+        statusMsg.innerText = TEXTS[currentLang].saving;
+        statusMsg.style.color = "#aaa";
+        timeout = setTimeout(saveText, 800);
+    };
 
-    function sendMessage(msg) {
+    inputKey.addEventListener('input', debouncedSaveText);
+    inputUser.addEventListener('input', debouncedSaveText);
+    inputKey.addEventListener('change', saveText);
+    inputUser.addEventListener('change', saveText);
+    window.addEventListener('beforeunload', () => {
+        if (timeout) { clearTimeout(timeout); saveText(); }
+    });
         chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
             if (tabs[0] && tabs[0].id) {
                 chrome.tabs.sendMessage(tabs[0].id, msg).catch(()=>{});
