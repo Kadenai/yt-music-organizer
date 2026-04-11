@@ -167,41 +167,44 @@ window.YTM.Parser = {
             }
             if (!subtitle) return null;
 
-            // Ex: "Playlist • 189 visualizações • 415 itens • Mais de 9 horas"
             const text = subtitle.textContent;
-            const parts = text.split(/[•·]/);
+            console.log(`[YTM] Subtitle raw: "${text}"`);
 
-            // PASSO 1: Busca ESPECÍFICA pelo segmento com palavra-chave de contagem
-            for (let part of parts) {
-                const trimmed = part.trim();
-                // Busca "415 itens", "50 songs", "12 músicas", "100 tracks"
-                if (trimmed.match(/(iten|song|track|música|musica)/i)) {
-                    const numStr = trimmed.replace(/\D/g, '');
+            // MÉTODO 1: Regex direta — busca "N itens", "N songs", "N tracks", "N músicas"
+            // Funciona independente do separador (•, ·, espaço, etc.)
+            const itemRegex = /(\d[\d.,]*)\s*(iten|item|song|track|músic|music)/i;
+            const match = text.match(itemRegex);
+            if (match) {
+                const num = parseInt(match[1].replace(/\D/g, ''), 10);
+                if (num > 0 && num < 100000) {
+                    console.log(`[YTM] ✅ Total detectado: ${num} (via regex: "${match[0]}")`);
+                    return num;
+                }
+            }
+
+            // MÉTODO 2: Fallback via spans individuais
+            // Cada span filho contém um pedaço separado do subtitle
+            const spans = subtitle.querySelectorAll('span');
+            for (const span of spans) {
+                const spanText = span.textContent.trim();
+                if (spanText.match(/(iten|item|song|track|músic|music)/i)) {
+                    const numStr = spanText.replace(/\D/g, '');
                     if (numStr) {
                         const num = parseInt(numStr, 10);
                         if (num > 0 && num < 100000) {
-                            console.log(`[YTM] Total detectado: ${num} (de "${trimmed}")`);
+                            console.log(`[YTM] ✅ Total detectado: ${num} (via span: "${spanText}")`);
                             return num;
                         }
                     }
                 }
             }
 
-            // PASSO 2: Fallback — número puro (sem palavras conhecidas como view/hora/ano)
-            for (let part of parts) {
-                const trimmed = part.trim();
-                if (trimmed.match(/(:|hora|hour|min|sec|visual|view)/i)) continue;
-                if (trimmed.match(/^(19|20)\d{2}$/)) continue;
-                if (trimmed.match(/^(playlist|album|single|ep)$/i)) continue;
-                const cleaned = trimmed.replace(/\D/g, '');
-                if (cleaned && cleaned.length > 0 && cleaned.length <= 5) {
-                    const num = parseInt(cleaned, 10);
-                    if (num > 0 && num < 100000) return num;
-                }
-            }
-
+            console.warn(`[YTM] ⚠️ Não encontrou contagem de itens no subtitle: "${text}"`);
             return null;
-        } catch (e) { return null; }
+        } catch (e) { 
+            console.error('[YTM] Erro no parser:', e);
+            return null; 
+        }
     },
 
     extrairDadosBasicos: (item, index) => {
