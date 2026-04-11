@@ -71,18 +71,92 @@ window.YTM.Common = {
         return parts.length === 2 ? parts[0] * 60 + parts[1] : (parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : 0);
     }
 };
+// --- EXPORTAR LOGS DE DIAGNÓSTICO ---
+window.YTM.exportarLogs = function() {
+    const diag = window.YTM._diag;
+    if (!diag) {
+        console.error('[YTM] Nenhum dado de diagnóstico. Rode uma ordenação por Popularidade primeiro.');
+        return;
+    }
+
+    function download(filename, content) {
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    // === ARQUIVO 1: Músicas da Playlist ===
+    let txt1 = '=== MÚSICAS DA PLAYLIST (resultado do enriquecimento) ===\n\n';
+    
+    // Agrupa por artista
+    const porArtista = {};
+    for (const m of diag.playlist) {
+        const key = m.artista || 'Desconhecido';
+        if (!porArtista[key]) porArtista[key] = [];
+        porArtista[key].push(m);
+    }
+
+    const artistasOrdenados = Object.keys(porArtista).sort((a, b) => 
+        a.toLowerCase().localeCompare(b.toLowerCase())
+    );
+
+    let totalOk = 0, totalFail = 0;
+    for (const artista of artistasOrdenados) {
+        const musicas = porArtista[artista];
+        musicas.sort((a, b) => a.titulo.localeCompare(b.titulo));
+
+        txt1 += `\n--- ${artista} (${musicas.length} músicas) ---\n`;
+        for (const m of musicas) {
+            if (m.views === -1) {
+                txt1 += `  [FALHA] "${m.titulo}" | canonical: "${m.canonical}" | NÃO ENCONTRADA\n`;
+                totalFail++;
+            } else {
+                txt1 += `  [OK]    "${m.titulo}" | canonical: "${m.canonical}" | ${m.views} listeners | via ${m.source}\n`;
+                totalOk++;
+            }
+        }
+    }
+    txt1 += `\n=== RESUMO: ${totalOk} OK, ${totalFail} FALHAS, ${diag.playlist.length} TOTAL ===\n`;
+
+    // === ARQUIVO 2: Dados do Last.fm ===
+    let txt2 = '=== TOP TRACKS DO LAST.FM (dados brutos retornados pela API) ===\n\n';
+    
+    if (diag.lastfm) {
+        const artistasLfm = Object.keys(diag.lastfm).sort((a, b) => 
+            a.toLowerCase().localeCompare(b.toLowerCase())
+        );
+
+        for (const artista of artistasLfm) {
+            const tracks = diag.lastfm[artista] || [];
+            txt2 += `\n--- ${artista} (${tracks.length} tracks no Top) ---\n`;
+            // Ordena por listeners desc
+            const sorted = [...tracks].sort((a, b) => b.listeners - a.listeners);
+            for (let i = 0; i < sorted.length; i++) {
+                const t = sorted[i];
+                txt2 += `  #${String(i+1).padStart(4, ' ')} | ${String(t.listeners).padStart(10, ' ')} listeners | "${t.originalName}" (canonical: "${t.canonical}")\n`;
+            }
+        }
+    } else {
+        txt2 += 'Last.fm não foi utilizado (sem API key configurada).\n';
+    }
+
+    download('playlist_musicas.txt', txt1);
+    setTimeout(() => download('lastfm_dados.txt', txt2), 500);
+
+    console.log('[YTM] ✅ 2 arquivos baixados: playlist_musicas.txt e lastfm_dados.txt');
+};
 
 // --- PARSER ATUALIZADO ---
 window.YTM.Parser = {
     getTotalPlaylistCount: () => {
         try {
-            // Lista de possíveis locais onde o YouTube esconde o contador
             const selectors = [
-                // 1. Playlists Editáveis (Sua imagem)
                 'ytmusic-editable-playlist-detail-header-renderer .second-subtitle-container .second-subtitle',
-                // 2. Playlists de Terceiros / Álbuns
                 'ytmusic-responsive-header-renderer .second-subtitle-container .second-subtitle',
-                // 3. Fallback genérico
                 '.second-subtitle'
             ];
 
@@ -91,43 +165,46 @@ window.YTM.Parser = {
                 subtitle = document.querySelector(sel);
                 if (subtitle) break;
             }
-
             if (!subtitle) return null;
 
-            // Pega todo o texto (incluindo spans filhos)
-            // Ex: "Playlist • 2025 • 497 itens • Mais de 9 horas"
+            // Ex: "Playlist • 189 visualizações • 415 itens • Mais de 9 horas"
             const text = subtitle.textContent;
-            
-            // Quebra por separadores comuns do YouTube
-            const parts = text.split(/[•·]/); 
+            const parts = text.split(/[•·]/);
 
+            // PASSO 1: Busca ESPECÍFICA pelo segmento com palavra-chave de contagem
             for (let part of parts) {
-                part = part.trim();
-                
-                // 1. Ignora Duração (tem ':', 'hora', 'min', 'sec')
-                if (part.match(/(\d+:|hora|hour|min|sec)/i)) continue;
+                const trimmed = part.trim();
+                // Busca "415 itens", "50 songs", "12 músicas", "100 tracks"
+                if (trimmed.match(/(iten|song|track|música|musica)/i)) {
+                    const numStr = trimmed.replace(/\D/g, '');
+                    if (numStr) {
+                        const num = parseInt(numStr, 10);
+                        if (num > 0 && num < 100000) {
+                            console.log(`[YTM] Total detectado: ${num} (de "${trimmed}")`);
+                            return num;
+                        }
+                    }
+                }
+            }
 
-                // 2. Ignora Ano (4 dígitos, começa com 19 ou 20)
-                if (part.match(/^(19|20)\d{2}$/)) continue;
-
-                // 3. Ignora palavras chaves de tipo
-                if (part.match(/^(playlist|album|single|ep)$/i)) continue;
-
-                // 4. Extrai números
-                const numStr = part.replace(/\D/g, '');
-                
-                // Se sobrou um número, é a quantidade de itens!
-                if (numStr && numStr.length > 0) {
-                    const num = parseInt(numStr, 10);
-                    // Filtro de sanidade: playlists raramente tem 0 ou números absurdos como ano
+            // PASSO 2: Fallback — número puro (sem palavras conhecidas como view/hora/ano)
+            for (let part of parts) {
+                const trimmed = part.trim();
+                if (trimmed.match(/(:|hora|hour|min|sec|visual|view)/i)) continue;
+                if (trimmed.match(/^(19|20)\d{2}$/)) continue;
+                if (trimmed.match(/^(playlist|album|single|ep)$/i)) continue;
+                const cleaned = trimmed.replace(/\D/g, '');
+                if (cleaned && cleaned.length > 0 && cleaned.length <= 5) {
+                    const num = parseInt(cleaned, 10);
                     if (num > 0 && num < 100000) return num;
                 }
             }
+
             return null;
         } catch (e) { return null; }
     },
 
-    extrairDadosBasicos: (item) => {
+    extrairDadosBasicos: (item, index) => {
         try {
             const cols = item.flexColumns;
             const tituloRaw = cols[0].musicResponsiveListItemFlexColumnRenderer.text.runs[0].text;
@@ -174,7 +251,8 @@ window.YTM.Parser = {
                 album: album || "", year: 9999, trackNumber: 999, discNumber: 1, source: "none", 
                 views: -1, userPlays: -1,
                 duration: durationSec,
-                randomSeed: Math.random()
+                randomSeed: Math.random(),
+                originalIndex: index || 0
             };
         } catch (e) { return null; }
     }

@@ -1,4 +1,4 @@
-// main.js - Versão 9.0 (Persistent Scroller)
+// main.js - Versão 10.0 (Scroller v4 — scrollIntoView Only)
 
 (function() {
 
@@ -8,7 +8,11 @@
         'FUS_FAV_ALBUMS': { type: 'GROUP_BY_ALBUM', scoreFn: (t) => t.reduce((s, x) => s + (Number(x.userPlays)||0), 0), descending: true },
         'FUS_EXPRESS': { type: 'GROUP_BY_ALBUM', scoreFn: (t) => t.reduce((s, x) => s + x.duration, 0), descending: false },
         'FUS_DISCO': { type: 'GROUP_BY_ALBUM', scoreFn: (t) => t[0].year || 9999, descending: false, specialSort: 'DISCOGRAPHY' },
-        'FUS_HALL_FAME': { type: 'GROUP_BY_ARTIST', scoreFn: (t) => t.reduce((s, x) => s + (Number(x.views)||0), 0), descending: true },
+        'FUS_HALL_FAME': { type: 'GROUP_BY_ARTIST', scoreFn: (tracks) => {
+            const validViews = tracks.map(x => Number(x.views)).filter(v => v > 0);
+            if (validViews.length === 0) return 0;
+            return validViews.reduce((s, v) => s + v, 0) / validViews.length;
+        }, descending: true },
         'FUS_TOP_ARTISTS': { type: 'GROUP_BY_ARTIST', scoreFn: (t) => t.reduce((s, x) => s + (Number(x.userPlays)||0), 0), descending: true },
         'FUS_GREATEST_HITS': { type: 'CASCADE', modes: ['ARTIST_AZ', 'VIEWS_DESC'] },
         'FUS_FAN_CLUB':      { type: 'CASCADE', modes: ['ARTIST_AZ', 'MY_SCROBBLES'] },
@@ -76,64 +80,135 @@
                     if (res !== 0) return res;
                 }
             }
+            // P10: Preserva ordem original como fallback
+            if (a.originalIndex !== undefined && b.originalIndex !== undefined) {
+                return a.originalIndex - b.originalIndex;
+            }
             return a.titulo.localeCompare(b.titulo);
         });
     }
 
-    // --- SCROLLER PERSISTENTE ---
+    // =========================================================
+    // SCROLLER v6.0 — Determinístico (TUDO ou ERRO)
+    // =========================================================
+
+    function getLoadedCount() {
+        return document.querySelectorAll('ytmusic-responsive-list-item-renderer').length;
+    }
+
+    /**
+     * Tenta carregar mais itens usando TODAS as técnicas conhecidas.
+     */
+    function tentarCarregar() {
+        const items = document.querySelectorAll('ytmusic-responsive-list-item-renderer');
+        if (items.length === 0) return;
+
+        // Técnica 1: scrollIntoView no último item (block:'end')
+        items[items.length - 1].scrollIntoView({ behavior: 'instant', block: 'end' });
+
+        // Técnica 2: Busca e scroll até o spinner/continuation
+        const spinner = document.querySelector(
+            'tp-yt-paper-spinner-lite, ' +
+            'yt-next-continuation, ' +
+            '#continuations'
+        );
+        if (spinner) {
+            spinner.scrollIntoView({ behavior: 'instant', block: 'center' });
+        }
+    }
+
+    /**
+     * Espera novos itens aparecerem (polling a cada 400ms, até timeoutMs).
+     */
+    async function esperarNovoConteudo(countAntes, timeoutMs) {
+        const inicio = Date.now();
+        while (Date.now() - inicio < timeoutMs) {
+            await new Promise(r => setTimeout(r, 400));
+            if (getLoadedCount() > countAntes) return true;
+        }
+        return false;
+    }
+
+    /**
+     * @returns {number} Total de itens carregados, ou -1 se houve erro/cancel.
+     */
     async function realizarScrollCompleto() {
         const metaTotal = window.YTM.Parser.getTotalPlaylistCount();
-        let currentCount = 0;
-        let retries = 0;
-        // Se temos uma meta, tentamos mais vezes. Se não, desistimos mais rápido.
-        const MAX_RETRIES = metaTotal ? 15 : 5; 
-
-        window.YTM.UI.update("Carregando...", "Analisando tamanho da playlist...");
         
+        // SEM TOTAL = ERRO. Não prosseguir sem saber quantas músicas tem.
+        if (!metaTotal) {
+            window.YTM.UI.error("Não foi possível identificar o total de músicas da playlist.");
+            return -1;
+        }
+
+        console.log(`[YTM] Scroll v6: Preciso carregar ${metaTotal} itens.`);
+        window.YTM.UI.update("Carregando...", `0 / ${metaTotal} itens...`);
+
+        const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutos de timeout absoluto
+        const inicio = Date.now();
+        let semProgressoConsecutivo = 0;
+
         while (true) {
-            if (isCancelled) return false;
+            if (isCancelled) return -1;
 
-            // Conta apenas os itens REAIS de música (ignora headers/dividers)
-            currentCount = document.querySelectorAll('ytmusic-responsive-list-item-renderer').length;
+            const currentCount = getLoadedCount();
+            window.YTM.UI.update("Carregando...", `${currentCount} / ${metaTotal} itens...`);
 
-            if (metaTotal) {
-                 window.YTM.UI.update("Carregando...", `${currentCount} / ${metaTotal} itens...`);
-                 // Se passamos da meta (ghost tracks) ou chegamos nela, para.
-                 if (currentCount >= metaTotal) break;
-            } else {
-                 window.YTM.UI.update("Carregando...", `${currentCount} itens...`);
+            // CHEGOU NO TOTAL → SUCESSO
+            if (currentCount >= metaTotal) {
+                console.log(`[YTM] ✅ Todas as ${metaTotal} músicas carregadas!`);
+                return currentCount;
             }
 
-            window.scrollTo(0, document.documentElement.scrollHeight);
-            await new Promise(r => setTimeout(r, 1500));
+            // TIMEOUT ABSOLUTO
+            if (Date.now() - inicio > TIMEOUT_MS) {
+                window.YTM.UI.error(`Timeout: só carregou ${currentCount} de ${metaTotal} músicas.`);
+                return -1;
+            }
 
-            const newCount = document.querySelectorAll('ytmusic-responsive-list-item-renderer').length;
-            
-            if (newCount === currentCount) {
-                retries++;
-                
-                // Se tem Meta e ainda não chegou, faz um "Super Wiggle" (sobe mais)
-                if (metaTotal && currentCount < metaTotal) {
-                    window.scrollBy(0, -1000); // Sobe bastante
-                    await new Promise(r => setTimeout(r, 800));
-                    window.scrollTo(0, document.documentElement.scrollHeight); // Desce tudo
-                } else {
-                    // Wiggle normal
-                    window.scrollBy(0, -300);
-                    await new Promise(r => setTimeout(r, 500));
-                    window.scrollTo(0, document.documentElement.scrollHeight);
-                }
+            // Tenta carregar mais
+            tentarCarregar();
 
-                if (retries >= MAX_RETRIES) {
-                    console.warn(`[YTM] Scroll desistiu. Meta: ${metaTotal}, Atual: ${currentCount}`);
-                    break;
-                }
+            // Espera até 6s por novos itens
+            const carregou = await esperarNovoConteudo(currentCount, 6000);
+
+            if (carregou) {
+                semProgressoConsecutivo = 0;
+                const newCount = getLoadedCount();
+                console.log(`[YTM] Progresso: ${currentCount} → ${newCount}`);
             } else {
-                retries = 0; // Reset se achou algo novo
+                semProgressoConsecutivo++;
+                console.warn(`[YTM] Sem progresso #${semProgressoConsecutivo}. Atual: ${currentCount}/${metaTotal}`);
+
+                // Recovery: scroll pra itens anteriores e volta
+                const items = document.querySelectorAll('ytmusic-responsive-list-item-renderer');
+                const jumpBack = Math.min(20, Math.floor(items.length / 2));
+                if (items.length > jumpBack) {
+                    // Volta jumpBack itens
+                    items[items.length - jumpBack].scrollIntoView({ behavior: 'instant', block: 'start' });
+                    await new Promise(r => setTimeout(r, 1500));
+                    // Scroll progressivo de volta ao final
+                    for (let i = items.length - jumpBack; i < items.length; i += 5) {
+                        items[Math.min(i, items.length - 1)].scrollIntoView({ behavior: 'instant', block: 'end' });
+                        await new Promise(r => setTimeout(r, 300));
+                    }
+                    // Tenta carregar de novo
+                    tentarCarregar();
+                    await new Promise(r => setTimeout(r, 3000));
+                }
+
+                // Depois de muitas tentativas sem progresso, tenta block:'start' no último
+                if (semProgressoConsecutivo > 3) {
+                    items[items.length - 1].scrollIntoView({ behavior: 'instant', block: 'start' });
+                    await new Promise(r => setTimeout(r, 3000));
+                }
             }
         }
-        return true;
     }
+
+    // =========================================================
+    // ENVIO PARA YOUTUBE
+    // =========================================================
 
     async function enviarParaYouTube(lista, topId, pid) {
         const client = window.YTM.Auth.getClientInfo();
@@ -148,9 +223,6 @@
 
             const ch = lista.slice(i, i+window.YTM.config.BATCH_SIZE);
             window.YTM.UI.update("Salvando...", `Lote ${Math.floor(i/window.YTM.config.BATCH_SIZE)+1}/${tot}`);
-            
-            // Fila de Throttling para envio também? Opcional, mas seguro.
-            // Por enquanto, mantemos delay simples que funciona bem.
             
             let acts = [];
             for (let m of ch) { 
@@ -170,20 +242,27 @@
                 await new Promise(r => setTimeout(r, window.YTM.config.DELAY_BATCH)); 
             }
             
-            // Yield para UI
             await window.YTM.Common.yield();
         }
         window.YTM.UI.success();
     }
 
+    // =========================================================
+    // PROCESSO PRINCIPAL
+    // =========================================================
+
     async function iniciarProcesso(modes, isReverse, creds) {
         try {
             isCancelled = false; 
-            window.YTM.Queue.clear(); // Limpa fila antiga se houver
+            window.YTM.Queue.clear();
             window.YTM.UI.send('UI_START');
             
-            const scrollOk = await realizarScrollCompleto();
-            if (!scrollOk && isCancelled) { window.YTM.UI.send('UI_STOPPED'); return; }
+            const scrollResult = await realizarScrollCompleto();
+            if (scrollResult === -1) {
+                // Erro ou cancelamento — a mensagem já foi exibida pelo scroller
+                if (isCancelled) window.YTM.UI.send('UI_STOPPED');
+                return;
+            }
 
             window.YTM.UI.update("Lendo...", "Processando lista...");
             const renderer = document.querySelector('ytmusic-playlist-shelf-renderer');
@@ -194,6 +273,23 @@
                 .filter(i => i && i.playlistItemData)
                 .map(window.YTM.Parser.extrairDadosBasicos)
                 .filter(m => m !== null);
+
+            // Verificação de integridade
+            const domCount = getLoadedCount();
+            console.log(`[YTM] Dados extraídos: ${lista.length} (DOM: ${domCount})`);
+            
+            if (lista.length < domCount) {
+                console.warn(`[YTM] Data model incompleto (${lista.length} vs DOM ${domCount}). Re-sync...`);
+                await new Promise(r => setTimeout(r, 1500));
+                if (renderer.data?.contents) {
+                    lista = renderer.data.contents
+                        .map(i => i.musicResponsiveListItemRenderer)
+                        .filter(i => i && i.playlistItemData)
+                        .map(window.YTM.Parser.extrairDadosBasicos)
+                        .filter(m => m !== null);
+                    console.log(`[YTM] Re-sync: ${lista.length} itens`);
+                }
+            }
 
             if (lista.length === 0) return window.YTM.UI.error("Vazia.");
             const topId = lista[0].id;
@@ -250,7 +346,7 @@
         }
         if (ev.data && ev.data.type === "CMD_STOP_SORT") {
             isCancelled = true;
-            window.YTM.Queue.clear(); // Esvazia fila de requests imediatamente
+            window.YTM.Queue.clear();
         }
     });
 

@@ -1,102 +1,8 @@
-// content.js - Versão 15.1 (innerHTML Security Fix)
+// content.js - Versão 16.0 (i18n Refactor)
 
 let config = { showWarning: true };
-let currentLang = 'en'; 
 
-const TRANSLATIONS = {
-    en: {
-        modalTitle: "Sort Builder", activeLabel: "Active Criteria", emptyMsg: "Click below to add criteria...", lblReverse: "Reverse Order",
-        btnCancel: "Cancel", btnOrganize: "ORGANIZE", btnClear: "Clear all", statusInit: "Starting...", statusPrep: "Preparing engine...",
-        statusDone: "Success!", statusDoneMsg: "Playlist organized.", statusWarn: "Warning", statusWarnMsg: "$1 tracks without data were moved.",
-        statusConnect: "Connecting...", mainBtn: "Organize", securityTitle: "Are you sure?",
-        securityDesc: "This action rearranges your playlist permanently. We recommend creating a backup first.",
-        btnConfirm: "YES, DO IT", btnBack: "Back",
-        statusStopping: "Stopping...", statusStopped: "Cancelled by user.",
-        tipViews: "<b>Tip:</b> For better accuracy on 'Popularity', add your Last.fm API Key in settings.",
-        errScrobbles: "<b>Locked:</b> Please add your Last.fm Username in extension settings to use this feature.",
-        maxLimit: "Maximum of 2 criteria reached.",
-
-        // NOMES CURTOS
-        critArtist: "Artist Name", descArtist: "Group by author (A-Z)", 
-        critAlbum: "Album (Year/Order)", descAlbum: "Chronological order", 
-        critViews: "Popularity", descViews: "Most played (Global)", 
-        critScrobbles: "My Scrobbles", descScrobbles: "Your Last.fm history",
-        critTitle: "Track Title", descTitle: "Title (A-Z)", 
-        critDuration: "Duration", descDuration: "Shortest to Longest",
-        critShuffle: "True Shuffle", descShuffle: "Randomize everything",
-        fusMyFavAlbums: "My Favorite Albums", 
-        fusExpress: "Express Session",
-        fusDisco: "Classic Discography",
-        fusHallFame: "Hall of Fame",
-        fusTopArtists: "My Top Artists",
-        fusGreatestHits: "Band's Greatest Hits", 
-        fusFanClub: "Fan Club",
-        fusArtistDur: "Shortest first (Per Artist)",
-
-        // DESCRIÇÕES COMPLETAS
-        txtArtist: "Artists in alphabetical order.",
-        txtAlbum: "Older albums come first, songs stay according to the original album order.",
-        txtViews: "Most famous songs at the top (based on Last.fm/YouTube Views).",
-        txtScrobbles: "Puts the songs you listened to the most at the top (requires Last.fm account).",
-        txtTitle: "Songs in alphabetical order.",
-        txtDuration: "Shortest songs first.",
-        txtShuffle: "Random.",
-        txtFavAlbums: "Your most listened albums from Last.fm play first.",
-        txtExpress: "Shortest albums play first.",
-        txtDisco: "Organizes Artists (A-Z). Within each artist, organizes their albums chronologically (from oldest to newest).",
-        txtHallFame: "Most popular albums play first.",
-        txtTopArtists: "Favorite artists from Last.fm play first.",
-        txtGreatestHits: "Band A-Z. Within the band, hits play first.",
-        txtFanClub: "Band A-Z. Within the band, songs you listen to the most on Last.fm play first.",
-        txtArtistDur: "Band A-Z. Within the band, shortest songs play first."
-    },
-    pt: {
-        modalTitle: "Construtor de Ordem", activeLabel: "Critérios Ativos", emptyMsg: "Clique abaixo para adicionar critérios...", lblReverse: "Ordem Reversa",
-        btnCancel: "Cancelar", btnOrganize: "ORGANIZAR", btnClear: "Limpar tudo", statusInit: "Iniciando...", statusPrep: "Preparando motor...",
-        statusDone: "Sucesso!", statusDoneMsg: "Playlist organizada.", statusWarn: "Aviso", statusWarnMsg: "$1 músicas sem dados foram movidas.",
-        statusConnect: "Conectando...", mainBtn: "Organizar", securityTitle: "Tem certeza?",
-        securityDesc: "Essa ação reordena a playlist permanentemente. Recomendamos criar um backup antes.",
-        btnConfirm: "SIM, ORGANIZAR", btnBack: "Voltar",
-        statusStopping: "Parando...", statusStopped: "Cancelado pelo usuário.",
-        tipViews: "<b>Dica:</b> Para maior precisão em 'Popularidade', adicione sua Chave API do Last.fm nas configurações.",
-        errScrobbles: "<b>Bloqueado:</b> Adicione seu Usuário Last.fm nas configurações da extensão para usar este recurso.",
-        maxLimit: "Máximo de 2 critérios atingido.",
-
-        // NOMES CURTOS
-        critArtist: "Nome do Artista", descArtist: "Agrupar por autor (A-Z)", 
-        critAlbum: "Álbum (Ano/Ordem)", descAlbum: "Ordem cronológica", 
-        critViews: "Popularidade", descViews: "Mais ouvidas (Global)", 
-        critScrobbles: "Meus Scrobbles", descScrobbles: "Seu histórico Last.fm",
-        critTitle: "Nome da Música", descTitle: "Título (A-Z)", 
-        critDuration: "Duração", descDuration: "Curta p/ Longa",
-        critShuffle: "Aleatório Real", descShuffle: "Embaralhar tudo",
-        fusMyFavAlbums: "Meus Álbuns Preferidos", 
-        fusExpress: "Sessão Expressa",
-        fusDisco: "Discografia Clássica",
-        fusHallFame: "Hall da Fama",
-        fusTopArtists: "Meu Top Artistas",
-        fusGreatestHits: "Greatest Hits da Banda", 
-        fusFanClub: "Fã Clube",
-        fusArtistDur: "Curta p/ Longa (Por Artista)",
-
-        // DESCRIÇÕES COMPLETAS
-        txtArtist: "Artistas em ordem alfabética.",
-        txtAlbum: "Álbuns mais antigos vêm primeiro, músicas ficam de acordo com a ordem original do álbum.",
-        txtViews: "Músicas mais famosas no topo (baseado em Last.fm/YouTube Views).",
-        txtScrobbles: "Coloca as músicas que você mais ouviu no topo (requer conta Last.fm).",
-        txtTitle: "Músicas em ordem alfabética.",
-        txtDuration: "Músicas mais curtas primeiro.",
-        txtShuffle: "Aleatório.",
-        txtFavAlbums: "Seus álbuns mais ouvidos do Last.fm tocam primeiro.",
-        txtExpress: "Álbuns mais curtos tocam primeiro.",
-        txtDisco: "Organiza Artistas (A-Z). Dentro de cada artista, organiza seus álbuns cronologicamente (do mais antigo ao último lançado).",
-        txtHallFame: "Álbuns mais populares tocam primeiro.",
-        txtTopArtists: "Artistas preferidos do Last.fm tocam primeiro.",
-        txtGreatestHits: "Banda A-Z. Dentro da banda, os sucessos tocam primeiro.",
-        txtFanClub: "Banda A-Z. Dentro da banda, as músicas que você mais ouve no Last.fm tocam primeiro.",
-        txtArtistDur: "Banda A-Z. Dentro da banda, as músicas mais curtas tocam primeiro."
-    }
-};
+function t(key) { return window.I18N.t(key); }
 
 const ICONS = {
     ARTIST: `<svg viewBox="0 0 24 24" width="18" height="18" fill="white"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>`,
@@ -114,7 +20,7 @@ const ICONS = {
     LOCK: `<svg viewBox="0 0 24 24" width="14" height="14" fill="#666"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>`,
     LIGHTBULB: `<svg viewBox="0 0 24 24" width="16" height="16" fill="#ffcc00"><path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7zm2.85 11.1l-.85.6V16h-4v-2.3l-.85-.6A4.997 4.997 0 0 1 7 9c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.63-.8 3.16-2.15 4.1z"/></svg>`,
     STAR: `<svg viewBox="0 0 24 24" width="20" height="20" fill="#ffd700"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>`,
-    CROSS: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60" width="60" height="60" role="button" aria-label="Fechar"><circle cx="30" cy="30" r="30" fill="#FF0000"/><path d="M 20 20 L 40 40 M 40 20 L 20 40" stroke="black" stroke-width="5" stroke-linecap="round" fill="none"/></svg>`
+    CROSS: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60" width="60" height="60" role="button" aria-label="Close"><circle cx="30" cy="30" r="30" fill="#FF0000"/><path d="M 20 20 L 40 40 M 40 20 L 20 40" stroke="black" stroke-width="5" stroke-linecap="round" fill="none"/></svg>`
 };
 
 const CRITERIA_IDS = [
@@ -140,9 +46,13 @@ const FUSIONS = {
 
 function safeSetHTML(element, htmlString) {
     while (element.firstChild) element.removeChild(element.firstChild);
-    const template = document.createElement('template');
-    template.innerHTML = htmlString.trim();
-    element.appendChild(template.content.cloneNode(true));
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(
+        `<body>${htmlString.trim()}</body>`, 'text/html'
+    );
+    while (doc.body.firstChild) {
+        element.appendChild(doc.body.firstChild);
+    }
 }
 
 function createIconElement(svgString) {
@@ -152,10 +62,9 @@ function createIconElement(svgString) {
 }
 
 if (typeof chrome !== "undefined" && chrome.storage) {
-    chrome.storage.sync.get(['showWarning', 'lastFmKey', 'lastFmUser', 'appLang'], (result) => {
+    chrome.storage.sync.get(['showWarning', 'lastFmKey', 'lastFmUser'], (result) => {
         if (result.showWarning !== undefined) config.showWarning = result.showWarning;
         window.LASTFM_CREDS = { key: result.lastFmKey || "", user: result.lastFmUser || "" };
-        currentLang = result.appLang || (navigator.language.startsWith('pt') ? 'pt' : 'en');
 
         renderModalTexts();
         atualizarTextoBotao();
@@ -167,11 +76,6 @@ if (typeof chrome !== "undefined" && chrome.storage) {
         if (req.type === 'UPDATE_CREDS') {
             window.LASTFM_CREDS = { key: req.key, user: req.user };
             if (document.getElementById('ytm-confirm-modal').style.display === 'flex') renderBuilder();
-        }
-        if (req.type === 'UPDATE_LANG') {
-            currentLang = req.lang;
-            renderModalTexts(); 
-            atualizarTextoBotao();
         }
     });
 }
@@ -194,8 +98,6 @@ document.body.appendChild(divContainer);
 
 let activeCriteria = []; 
 
-function t(key) { return TRANSLATIONS[currentLang][key] || key; }
-
 function renderModalTexts() {
     // 1. CAPTURA DE ESTADO
     const overlay = document.getElementById('ytm-overlay');
@@ -203,7 +105,7 @@ function renderModalTexts() {
     
     // Verifica estados de display
     const modal = document.getElementById('ytm-confirm-modal');
-    const isModalOpen = modal?.style.display === 'flex'; // ou 'block', conforme CSS
+    const isModalOpen = modal?.style.display === 'flex';
 
     const processView = document.getElementById('ytm-process-view');
     const isProcessOpen = processView?.style.display === 'flex';
@@ -308,7 +210,6 @@ function showTip(type, htmlContent) {
     const tipBox = document.getElementById('tip-container');
     if(!tipBox) return;
     
-    // CORREÇÃO: Substituído innerHTML por remoção segura de filhos
     while (tipBox.firstChild) tipBox.removeChild(tipBox.firstChild);
     
     const icon = type === 'error' ? ICONS.LOCK : ICONS.LIGHTBULB;
@@ -322,7 +223,6 @@ function showTip(type, htmlContent) {
 
     tipBox.appendChild(createIconElement(icon));
     
-    // CORREÇÃO: Substituído innerHTML por safeSetHTML
     const span = document.createElement('span');
     safeSetHTML(span, htmlContent);
     tipBox.appendChild(span);
@@ -505,7 +405,6 @@ function clearAllCriteria() {
 }
 
 function tratarCliqueBotao() {
-    // Reconstroi UI (mas renderModalTexts agora preserva estado se já existir)
     renderModalTexts(); 
     abrirModal();
 }
