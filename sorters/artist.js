@@ -7,7 +7,7 @@
             enrich: async (list) => { /* Nada a fazer */ },
             
             compare: (a, b) => {
-                return a.artista.localeCompare(b.artista);
+                return (a.artistaOriginal || a.artista).localeCompare(b.artistaOriginal || b.artista, undefined, { sensitivity: 'base' });
             }
         };
         

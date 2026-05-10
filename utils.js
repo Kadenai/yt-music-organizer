@@ -1,10 +1,11 @@
-// utils.js - Versão 5.0 (Header Parser V3 - Compatible with Editable Playlists)
+// utils.js - Versão 6.0 (Production Cleanup)
 
 window.YTM = window.YTM || {};
+window.YTM.debugMode = false;
 
 window.YTM.config = {
     BATCH_SIZE: 50,
-    DELAY_BATCH: 100,
+    DELAY_BATCH: 400,   // 100ms estava agressivo demais — gerava 409 ABORTED em sorts grandes
     DELAY_SCROLL: 2000,
     CONCURRENCY_LIMIT: 3,
     CACHE_TTL_HOURS: 72
@@ -50,7 +51,7 @@ window.YTM.Queue = {
         const { taskFn, resolve, reject } = window.YTM.Queue.queue.shift();
         taskFn().then(resolve).catch(reject).finally(() => {
             window.YTM.Queue.activeCount--;
-            setTimeout(window.YTM.Queue.next, 5); 
+            setTimeout(window.YTM.Queue.next, 5);
         });
     },
     clear: () => { window.YTM.Queue.queue = []; }
@@ -71,84 +72,6 @@ window.YTM.Common = {
         return parts.length === 2 ? parts[0] * 60 + parts[1] : (parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : 0);
     }
 };
-// --- EXPORTAR LOGS DE DIAGNÓSTICO ---
-window.YTM.exportarLogs = function() {
-    const diag = window.YTM._diag;
-    if (!diag) {
-        console.error('[YTM] Nenhum dado de diagnóstico. Rode uma ordenação por Popularidade primeiro.');
-        return;
-    }
-
-    function download(filename, content) {
-        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
-    }
-
-    // === ARQUIVO 1: Músicas da Playlist ===
-    let txt1 = '=== MÚSICAS DA PLAYLIST (resultado do enriquecimento) ===\n\n';
-    
-    // Agrupa por artista
-    const porArtista = {};
-    for (const m of diag.playlist) {
-        const key = m.artista || 'Desconhecido';
-        if (!porArtista[key]) porArtista[key] = [];
-        porArtista[key].push(m);
-    }
-
-    const artistasOrdenados = Object.keys(porArtista).sort((a, b) => 
-        a.toLowerCase().localeCompare(b.toLowerCase())
-    );
-
-    let totalOk = 0, totalFail = 0;
-    for (const artista of artistasOrdenados) {
-        const musicas = porArtista[artista];
-        musicas.sort((a, b) => a.titulo.localeCompare(b.titulo));
-
-        txt1 += `\n--- ${artista} (${musicas.length} músicas) ---\n`;
-        for (const m of musicas) {
-            if (m.views === -1) {
-                txt1 += `  [FALHA] "${m.titulo}" | canonical: "${m.canonical}" | NÃO ENCONTRADA\n`;
-                totalFail++;
-            } else {
-                txt1 += `  [OK]    "${m.titulo}" | canonical: "${m.canonical}" | ${m.views} listeners | via ${m.source}\n`;
-                totalOk++;
-            }
-        }
-    }
-    txt1 += `\n=== RESUMO: ${totalOk} OK, ${totalFail} FALHAS, ${diag.playlist.length} TOTAL ===\n`;
-
-    // === ARQUIVO 2: Dados do Last.fm ===
-    let txt2 = '=== TOP TRACKS DO LAST.FM (dados brutos retornados pela API) ===\n\n';
-    
-    if (diag.lastfm) {
-        const artistasLfm = Object.keys(diag.lastfm).sort((a, b) => 
-            a.toLowerCase().localeCompare(b.toLowerCase())
-        );
-
-        for (const artista of artistasLfm) {
-            const tracks = diag.lastfm[artista] || [];
-            txt2 += `\n--- ${artista} (${tracks.length} tracks no Top) ---\n`;
-            // Ordena por listeners desc
-            const sorted = [...tracks].sort((a, b) => b.listeners - a.listeners);
-            for (let i = 0; i < sorted.length; i++) {
-                const t = sorted[i];
-                txt2 += `  #${String(i+1).padStart(4, ' ')} | ${String(t.listeners).padStart(10, ' ')} listeners | "${t.originalName}" (canonical: "${t.canonical}")\n`;
-            }
-        }
-    } else {
-        txt2 += 'Last.fm não foi utilizado (sem API key configurada).\n';
-    }
-
-    download('playlist_musicas.txt', txt1);
-    setTimeout(() => download('lastfm_dados.txt', txt2), 500);
-
-    console.log('[YTM] ✅ 2 arquivos baixados: playlist_musicas.txt e lastfm_dados.txt');
-};
 
 // --- PARSER ATUALIZADO ---
 window.YTM.Parser = {
@@ -168,7 +91,7 @@ window.YTM.Parser = {
             if (!subtitle) return null;
 
             const text = subtitle.textContent;
-            console.log(`[YTM] Subtitle raw: "${text}"`);
+            if (window.YTM.debugMode) console.log(`[YTM] Subtitle raw: "${text}"`);
 
             // MÉTODO 1: Regex direta — busca "N itens", "N songs", "N tracks", "N músicas"
             // Funciona independente do separador (•, ·, espaço, etc.)
@@ -177,7 +100,7 @@ window.YTM.Parser = {
             if (match) {
                 const num = parseInt(match[1].replace(/\D/g, ''), 10);
                 if (num > 0 && num < 100000) {
-                    console.log(`[YTM] ✅ Total detectado: ${num} (via regex: "${match[0]}")`);
+                    if (window.YTM.debugMode) console.log(`[YTM] ✅ Total detectado: ${num} (via regex: "${match[0]}")`);
                     return num;
                 }
             }
@@ -192,39 +115,52 @@ window.YTM.Parser = {
                     if (numStr) {
                         const num = parseInt(numStr, 10);
                         if (num > 0 && num < 100000) {
-                            console.log(`[YTM] ✅ Total detectado: ${num} (via span: "${spanText}")`);
+                            if (window.YTM.debugMode) console.log(`[YTM] ✅ Total detectado: ${num} (via span: "${spanText}")`);
                             return num;
                         }
                     }
                 }
             }
 
-            console.warn(`[YTM] ⚠️ Não encontrou contagem de itens no subtitle: "${text}"`);
+            if (window.YTM.debugMode) console.warn(`[YTM] ⚠️ Não encontrou contagem de itens no subtitle: "${text}"`);
             return null;
-        } catch (e) { 
-            console.error('[YTM] Erro no parser:', e);
-            return null; 
+        } catch (e) {
+            if (window.YTM.debugMode) console.error('[YTM] Erro no parser:', e);
+            return null;
         }
     },
 
     extrairDadosBasicos: (item, index) => {
+        const videoId = item?.playlistItemData?.videoId || null;
+        const setVideoId = item?.playlistItemData?.playlistSetVideoId || null;
         try {
-            const cols = item.flexColumns;
-            const tituloRaw = cols[0].musicResponsiveListItemFlexColumnRenderer.text.runs[0].text;
-            let artista = "Desconhecido";
-            let album = ""; 
-            
-            if (cols[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs) {
-                const runs = cols[1].musicResponsiveListItemFlexColumnRenderer.text.runs;
-                if (runs.length >= 3) {
-                    artista = runs[0].text;
-                    album = runs[2].text;
-                } else {
-                    artista = runs[0].text;
-                }
+            const cols = item?.flexColumns;
+
+            // Único campo realmente obrigatório: o título.
+            const tituloRuns = cols?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+            if (!tituloRuns || tituloRuns.length === 0 || !tituloRuns[0]?.text) {
+                if (window.YTM.debugMode) console.warn('[YTM] Parser: item sem título extraível', { videoId, setVideoId });
+                return null;
             }
-            if (!album && cols.length > 2 && cols[2]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs) {
-                album = cols[2].musicResponsiveListItemFlexColumnRenderer.text.runs[0].text;
+            const tituloRaw = tituloRuns[0].text;
+
+            let artista = "Desconhecido";
+            let album = "";
+
+            try {
+                const runs = cols?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+                if (runs && runs.length > 0) {
+                    artista = runs[0]?.text || "Desconhecido";
+                    if (runs.length >= 3) {
+                        album = runs[2]?.text || "";
+                    }
+                }
+                if (!album) {
+                    const albRuns = cols?.[2]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+                    if (albRuns && albRuns[0]?.text) album = albRuns[0].text;
+                }
+            } catch (e) {
+                if (window.YTM.debugMode) console.warn('[YTM] Parser: falhou em artista/álbum', { videoId, msg: e.message });
             }
 
             let tituloClean = tituloRaw;
@@ -235,13 +171,15 @@ window.YTM.Parser = {
                     tituloClean = parts[1].trim();
                 }
             }
-            
+
             let durationSec = 0;
-            if (item.fixedColumns && item.fixedColumns.length > 0) {
-                const durText = item.fixedColumns[0].musicResponsiveListItemFixedColumnRenderer.text.runs[0].text;
-                durationSec = window.YTM.Common.parseDuration(durText);
+            try {
+                const durText = item?.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text;
+                if (durText) durationSec = window.YTM.Common.parseDuration(durText);
+            } catch (e) {
+                if (window.YTM.debugMode) console.warn('[YTM] Parser: falhou em duração', { videoId, msg: e.message });
             }
-    
+
             return {
                 tituloOriginal: tituloRaw,
                 titulo: window.YTM.Common.cleanText(tituloClean),
@@ -249,16 +187,106 @@ window.YTM.Parser = {
                 artistaOriginal: artista,
                 albumOriginal: album,
                 canonical: window.YTM.Common.createCanonicalId(tituloClean),
-                id: item.playlistItemData.playlistSetVideoId,
-                videoId: item.playlistItemData.videoId, 
-                album: album || "", year: 9999, trackNumber: 999, discNumber: 1, source: "none", 
+                id: setVideoId,
+                videoId: videoId,
+                album: album || "", year: 9999, trackNumber: 999, discNumber: 1, source: "none",
                 views: -1, userPlays: -1,
                 duration: durationSec,
                 randomSeed: Math.random(),
                 originalIndex: index || 0
             };
-        } catch (e) { return null; }
+        } catch (e) {
+            if (window.YTM.debugMode) console.warn('[YTM] Parser falhou em item', { videoId, setVideoId, msg: e.message });
+            return null;
+        }
     }
+};
+
+// Constrói o texto do diagnóstico (separado para reuso)
+window.YTM.construirDiagTxt = function(d) {
+    if (!d) return null;
+    let out = '';
+    out += `===== YTM SORT DIAGNOSTIC =====\n`;
+    out += `version:        ${d.version}\n`;
+    out += `timestamp:      ${d.ts}\n`;
+    out += `modes:          ${JSON.stringify(d.modes)}\n`;
+    out += `isReverse:      ${d.isReverse}\n`;
+    out += `topId:          ${d.topId}\n`;
+    out += `\n----- CONTAGEM -----\n`;
+    out += `metaTotal (subtitle):  ${d.metaTotal}\n`;
+    out += `domCount:              ${d.domCount}\n`;
+    out += `contentsCount:         ${d.contentsCount}\n`;
+    out += `listaCount:            ${d.listaCount}\n`;
+    out += `rendererOrphans:       ${d.rendererOrphans.length}\n`;
+    out += `domOnlyOrphans:        ${d.domOnlyOrphans.length}\n`;
+    out += `\n----- ÓRFÃOS (renderer) -----\n`;
+    if (d.rendererOrphans.length === 0) out += '(nenhum)\n';
+    else d.rendererOrphans.forEach(o => {
+        out += `  "${o.titulo}" — ${o.artista}  setVideoId=${o.id}  videoId=${o.videoId}\n`;
+    });
+    out += `\n----- ÓRFÃOS (só DOM, ausentes em data.contents) -----\n`;
+    if (d.domOnlyOrphans.length === 0) out += '(nenhum)\n';
+    else d.domOnlyOrphans.forEach(o => {
+        out += `  "${o.titulo}" — ${o.artista}  setVideoId=${o.id}  videoId=${o.videoId}\n`;
+    });
+    out += `\n----- AMOSTRA LISTA (pré-sort) -----\n`;
+    out += `Primeiros 3:\n`;
+    d.listaSample.primeiros.forEach(s => out += `  ${s}\n`);
+    out += `Últimos 3:\n`;
+    d.listaSample.ultimos.forEach(s => out += `  ${s}\n`);
+    out += `\n----- AMOSTRA SORT (pós-sort) -----\n`;
+    out += `Primeiros 5:\n`;
+    d.sortedSample.primeiros.forEach(s => out += `  ${s}\n`);
+    out += `Últimos 5:\n`;
+    d.sortedSample.ultimos.forEach(s => out += `  ${s}\n`);
+
+    out += `\n----- LOTES API -----\n`;
+    d.batches.forEach(b => {
+        out += `Lote ${b.batchNum}: items=${b.items} acts=${b.acts} status=${b.status}`;
+        if (b.attempts && b.attempts > 1) out += `  tentativas=${b.attempts}`;
+        if (b.skipped && b.skipped.length) out += `  pulados=${b.skipped.length}`;
+        if (b.errorBody) out += `\n  ERRO: ${b.errorBody}`;
+        out += '\n';
+        if (b.skipped && b.skipped.length) {
+            b.skipped.forEach(s => out += `    [pulado: ${s.motivo}] "${s.titulo}" id=${s.id}\n`);
+        }
+    });
+
+    return out;
+};
+
+// Exporta diagnóstico do último sort em arquivo .txt + backup em localStorage.
+// Útil em debug: window.YTM.debugMode = true → rodar sort → window.YTM.exportarSortLogs()
+window.YTM.exportarSortLogs = function() {
+    const d = window.YTM._sortDiag;
+    if (!d) {
+        // Fallback: tenta recuperar do localStorage (após reload).
+        const cached = localStorage.getItem('YTM_LAST_SORT_DIAG');
+        if (cached) {
+            console.log('[YTM] Recuperando diagnóstico do localStorage (sort anterior)...');
+            const blob = new Blob([cached], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `ytm_sort_diag_recovered_${Date.now()}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+            console.log('[YTM] ✅ ytm_sort_diag_recovered.txt baixado (do localStorage).');
+            return;
+        }
+        console.error('[YTM] Nenhum diagnóstico de sort disponível. Ative window.YTM.debugMode = true e repita o sort.');
+        return;
+    }
+    const out = window.YTM.construirDiagTxt(d);
+    try { localStorage.setItem('YTM_LAST_SORT_DIAG', out); } catch (e) {}
+    const blob = new Blob([out], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ytm_sort_diag_${Date.now()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    console.log('[YTM] ✅ ytm_sort_diag.txt baixado + backup em localStorage.');
 };
 
 window.YTM.UI = {

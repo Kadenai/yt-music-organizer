@@ -122,8 +122,6 @@ function renderModalTexts() {
     <div id="ytm-overlay" class="${isOverlayActive ? 'ativo' : ''}">
         <div id="ytm-process-view" class="ytm-centered-content" style="display: ${isProcessOpen ? 'flex' : 'none'}">
             <div id="ytm-loading-icon" class="ytm-spinner"></div>
-            <div id="ytm-success-icon" style="display:none;" class="checkmark-wrapper"><div class="checkmark"></div></div>
-            <div id="ytm-warning-icon-result" style="display:none; font-size: 60px; margin-bottom: 10px;">⚠️</div>
             <div>
                 <div class="ytm-status-text" id="ytm-status">${isProcessOpen && currentStatus ? currentStatus : t('statusInit')}</div>
                 <div class="ytm-sub-text" id="ytm-details">${isProcessOpen && currentDetails ? currentDetails : t('statusPrep')}</div>
@@ -439,9 +437,8 @@ function iniciarProcessoReal() {
     document.getElementById('ytm-confirm-modal').style.display = 'none';
     document.getElementById('ytm-security-check').style.display = 'none';
     document.getElementById('ytm-process-view').style.display = 'flex';
-    document.getElementById('ytm-loading-icon').style.display = 'block'; 
-    document.getElementById('ytm-warning-icon-result').style.display = 'none';
-    
+    document.getElementById('ytm-loading-icon').style.display = 'block';
+
     const btnStop = document.querySelector('.stop-btn');
     if (btnStop) {
         btnStop.classList.remove('stopping');
@@ -466,21 +463,7 @@ function atualizarTexto(titulo, subtitulo) {
 }
 
 function mostrarSucesso(d) {
-    document.getElementById('ytm-loading-icon').style.display = 'none';
-    const btnStop = document.querySelector('.stop-btn');
-    if(btnStop) btnStop.style.display = 'none';
-
-    if (d && d.falhas > 0) {
-        const warningIcon = document.getElementById('ytm-warning-icon-result');
-        safeSetHTML(warningIcon, ICONS.WARNING);
-        warningIcon.style.display = 'block';
-        atualizarTexto(t('statusWarn'), t('statusWarnMsg').replace('$1', d.falhas));
-        setTimeout(() => window.location.reload(), 4000);
-    } else {
-        document.getElementById('ytm-success-icon').style.display = 'flex';
-        atualizarTexto(t('statusDone'), t('statusDoneMsg'));
-        setTimeout(() => window.location.reload(), 2000);
-    }
+    window.location.reload();
 }
 
 document.addEventListener('keydown', (e) => {

@@ -1,8 +1,11 @@
-// main.js - Versão 10.0 (Scroller v4 — scrollIntoView Only)
+// main.js - Versão 11.0 (Production Cleanup)
 
 (function() {
 
-    let isCancelled = false; 
+    let isCancelled = false;
+
+    const log = (...a) => window.YTM?.debugMode && console.log(...a);
+    const warn = (...a) => window.YTM?.debugMode && console.warn(...a);
 
     const FUSION_STRATEGIES = {
         'FUS_FAV_ALBUMS': { type: 'GROUP_BY_ALBUM', scoreFn: (t) => t.reduce((s, x) => s + (Number(x.userPlays)||0), 0), descending: true },
@@ -48,7 +51,7 @@
                 key: key,
                 tracks: tracks,
                 score: strategy.scoreFn ? strategy.scoreFn(tracks) : 0,
-                artistName: tracks[0].artistaOriginal || tracks[0].artista, 
+                artistName: tracks[0].artistaOriginal || tracks[0].artista,
                 albumName: tracks[0].album || "",
                 year: tracks[0].year || 9999
             };
@@ -80,7 +83,6 @@
                     if (res !== 0) return res;
                 }
             }
-            // P10: Preserva ordem original como fallback
             if (a.originalIndex !== undefined && b.originalIndex !== undefined) {
                 return a.originalIndex - b.originalIndex;
             }
@@ -92,21 +94,38 @@
     // SCROLLER v6.0 — Determinístico (TUDO ou ERRO)
     // =========================================================
 
+    // Conta itens REAIS de playlist em data.contents (exclui Sugestões abaixo da
+    // playlist e o marcador continuationItemRenderer). É a fonte da verdade —
+    // contar DOM nodes inclui as Sugestões e infla o número.
     function getLoadedCount() {
-        return document.querySelectorAll('ytmusic-responsive-list-item-renderer').length;
+        const r = document.querySelector('ytmusic-playlist-shelf-renderer');
+        if (!r?.data?.contents) return 0;
+        return r.data.contents.filter(c => c && c.musicResponsiveListItemRenderer).length;
     }
 
-    /**
-     * Tenta carregar mais itens usando TODAS as técnicas conhecidas.
-     */
+    // True se ainda existe um continuationItemRenderer pendente em data.contents
+    // — significa que o YT Music tem mais itens server-side prontos pra carregar.
+    function temContinuacaoPendente() {
+        const r = document.querySelector('ytmusic-playlist-shelf-renderer');
+        if (!r?.data?.contents) return false;
+        return r.data.contents.some(c => c && c.continuationItemRenderer);
+    }
+
     function tentarCarregar() {
+        // Técnica 1: scroll até o DOM element do continuationItemRenderer (mais preciso).
+        const contItem = document.querySelector('ytmusic-continuation-item-renderer');
+        if (contItem) {
+            contItem.scrollIntoView({ behavior: 'instant', block: 'end' });
+            return;
+        }
+
         const items = document.querySelectorAll('ytmusic-responsive-list-item-renderer');
         if (items.length === 0) return;
 
-        // Técnica 1: scrollIntoView no último item (block:'end')
+        // Técnica 2: scroll no último item.
         items[items.length - 1].scrollIntoView({ behavior: 'instant', block: 'end' });
 
-        // Técnica 2: Busca e scroll até o spinner/continuation
+        // Técnica 3: scroll até spinner/continuation antigo.
         const spinner = document.querySelector(
             'tp-yt-paper-spinner-lite, ' +
             'yt-next-continuation, ' +
@@ -117,9 +136,6 @@
         }
     }
 
-    /**
-     * Espera novos itens aparecerem (polling a cada 400ms, até timeoutMs).
-     */
     async function esperarNovoConteudo(countAntes, timeoutMs) {
         const inicio = Date.now();
         while (Date.now() - inicio < timeoutMs) {
@@ -129,22 +145,18 @@
         return false;
     }
 
-    /**
-     * @returns {number} Total de itens carregados, ou -1 se houve erro/cancel.
-     */
     async function realizarScrollCompleto() {
         const metaTotal = window.YTM.Parser.getTotalPlaylistCount();
-        
-        // SEM TOTAL = ERRO. Não prosseguir sem saber quantas músicas tem.
+
         if (!metaTotal) {
             window.YTM.UI.error("Não foi possível identificar o total de músicas da playlist.");
             return -1;
         }
 
-        console.log(`[YTM] Scroll v6: Preciso carregar ${metaTotal} itens.`);
+        log(`[YTM] Scroll v6: Preciso carregar ${metaTotal} itens.`);
         window.YTM.UI.update("Carregando...", `0 / ${metaTotal} itens...`);
 
-        const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutos de timeout absoluto
+        const TIMEOUT_MS = 5 * 60 * 1000;
         const inicio = Date.now();
         let semProgressoConsecutivo = 0;
 
@@ -152,52 +164,44 @@
             if (isCancelled) return -1;
 
             const currentCount = getLoadedCount();
+            const continuacao = temContinuacaoPendente();
             window.YTM.UI.update("Carregando...", `${currentCount} / ${metaTotal} itens...`);
 
-            // CHEGOU NO TOTAL → SUCESSO
-            if (currentCount >= metaTotal) {
-                console.log(`[YTM] ✅ Todas as ${metaTotal} músicas carregadas!`);
+            if (currentCount >= metaTotal && !continuacao) {
+                log(`[YTM] ✅ Todas as ${metaTotal} músicas carregadas (sem continuação pendente)!`);
                 return currentCount;
             }
 
-            // TIMEOUT ABSOLUTO
             if (Date.now() - inicio > TIMEOUT_MS) {
                 window.YTM.UI.error(`Timeout: só carregou ${currentCount} de ${metaTotal} músicas.`);
                 return -1;
             }
 
-            // Tenta carregar mais
             tentarCarregar();
 
-            // Espera até 6s por novos itens
             const carregou = await esperarNovoConteudo(currentCount, 6000);
 
             if (carregou) {
                 semProgressoConsecutivo = 0;
                 const newCount = getLoadedCount();
-                console.log(`[YTM] Progresso: ${currentCount} → ${newCount}`);
+                log(`[YTM] Progresso: ${currentCount} → ${newCount}`);
             } else {
                 semProgressoConsecutivo++;
-                console.warn(`[YTM] Sem progresso #${semProgressoConsecutivo}. Atual: ${currentCount}/${metaTotal}`);
+                warn(`[YTM] Sem progresso #${semProgressoConsecutivo}. Atual: ${currentCount}/${metaTotal}`);
 
-                // Recovery: scroll pra itens anteriores e volta
                 const items = document.querySelectorAll('ytmusic-responsive-list-item-renderer');
                 const jumpBack = Math.min(20, Math.floor(items.length / 2));
                 if (items.length > jumpBack) {
-                    // Volta jumpBack itens
                     items[items.length - jumpBack].scrollIntoView({ behavior: 'instant', block: 'start' });
                     await new Promise(r => setTimeout(r, 1500));
-                    // Scroll progressivo de volta ao final
                     for (let i = items.length - jumpBack; i < items.length; i += 5) {
                         items[Math.min(i, items.length - 1)].scrollIntoView({ behavior: 'instant', block: 'end' });
                         await new Promise(r => setTimeout(r, 300));
                     }
-                    // Tenta carregar de novo
                     tentarCarregar();
                     await new Promise(r => setTimeout(r, 3000));
                 }
 
-                // Depois de muitas tentativas sem progresso, tenta block:'start' no último
                 if (semProgressoConsecutivo > 3) {
                     items[items.length - 1].scrollIntoView({ behavior: 'instant', block: 'start' });
                     await new Promise(r => setTimeout(r, 3000));
@@ -210,11 +214,12 @@
     // ENVIO PARA YOUTUBE
     // =========================================================
 
-    async function enviarParaYouTube(lista, topId, pid) {
+    async function enviarParaYouTube(lista, topId, pid, falhas) {
         const client = window.YTM.Auth.getClientInfo();
         const ah = await window.YTM.Auth.generateHeader();
         if(!ah) return window.YTM.UI.error("Auth Error");
-        
+
+        const diag = window.YTM._sortDiag || { batches: [] };
         let t = topId;
         const tot = Math.ceil(lista.length / window.YTM.config.BATCH_SIZE);
 
@@ -222,29 +227,63 @@
             if (isCancelled) { window.YTM.UI.send('UI_STOPPED'); return; }
 
             const ch = lista.slice(i, i+window.YTM.config.BATCH_SIZE);
-            window.YTM.UI.update("Salvando...", `Lote ${Math.floor(i/window.YTM.config.BATCH_SIZE)+1}/${tot}`);
-            
+            const batchNum = Math.floor(i/window.YTM.config.BATCH_SIZE)+1;
+            window.YTM.UI.update("Salvando...", `Lote ${batchNum}/${tot}`);
+
             let acts = [];
-            for (let m of ch) { 
-                if (m.id === t) continue; 
-                acts.push({ action: "ACTION_MOVE_VIDEO_BEFORE", setVideoId: m.id, movedSetVideoIdSuccessor: t }); 
-                t = m.id; 
+            const skipped = [];
+            for (let m of ch) {
+                if (m.id === t) { skipped.push({ id: m.id, titulo: m.titulo || '?', motivo: 'm.id === t' }); continue; }
+                if (!m.id) { skipped.push({ id: null, titulo: m.titulo || '?', motivo: 'sem setVideoId' }); continue; }
+                acts.push({ action: "ACTION_MOVE_VIDEO_BEFORE", setVideoId: m.id, movedSetVideoIdSuccessor: t });
+                t = m.id;
             }
-            if (acts.length) { 
-                try { 
-                    await fetch(`https://music.youtube.com/youtubei/v1/browse/edit_playlist?key=${client.apiKey}`, { 
-                        method: "POST", 
-                        headers: { "Content-Type": "application/json", "Authorization": ah, "X-Origin": window.location.origin, "X-Goog-AuthUser": client.authUser, "X-Youtube-Client-Name": client.clientName, "X-Youtube-Client-Version": client.clientVersion }, 
-                        body: JSON.stringify({ context: client.context, playlistId: pid, actions: acts }), 
-                        credentials: 'include' 
-                    }); 
-                } catch(e){} 
-                await new Promise(r => setTimeout(r, window.YTM.config.DELAY_BATCH)); 
+            const batchInfo = { batchNum, items: ch.length, acts: acts.length, skipped, status: null, errorBody: null, attempts: 0 };
+
+            if (acts.length) {
+                const MAX_ATTEMPTS = 4;
+                let resp = null;
+                for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                    batchInfo.attempts = attempt;
+                    try {
+                        resp = await fetch(`https://music.youtube.com/youtubei/v1/browse/edit_playlist?key=${client.apiKey}`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json", "Authorization": ah, "X-Origin": window.location.origin, "X-Goog-AuthUser": client.authUser, "X-Youtube-Client-Name": client.clientName, "X-Youtube-Client-Version": client.clientVersion },
+                            body: JSON.stringify({ context: client.context, playlistId: pid, actions: acts }),
+                            credentials: 'include'
+                        });
+                        batchInfo.status = resp.status;
+                        if (resp.ok) break;
+                        try { batchInfo.errorBody = (await resp.text()).slice(0, 500); } catch (e) {}
+                        warn(`[YTM-DIAG] Lote ${batchNum} HTTP ${resp.status} tentativa ${attempt}/${MAX_ATTEMPTS}`);
+                    } catch(e) {
+                        batchInfo.status = 'fetch-error';
+                        batchInfo.errorBody = e.message;
+                        warn(`[YTM-DIAG] Lote ${batchNum} fetch erro tentativa ${attempt}/${MAX_ATTEMPTS}:`, e.message);
+                    }
+                    if (attempt < MAX_ATTEMPTS) {
+                        const delay = 1500 * Math.pow(2, attempt - 1);
+                        await new Promise(r => setTimeout(r, delay));
+                    }
+                }
+
+                if (!resp || !resp.ok) {
+                    // ABORT — continuar com lotes seguintes corromperia toda a ordem
+                    warn(`[YTM-DIAG] Lote ${batchNum} falhou após ${MAX_ATTEMPTS} tentativas. ABORTANDO sort.`);
+                    diag.batches.push(batchInfo);
+                    if (window.YTM.debugMode) {
+                        try { window.YTM.exportarSortLogs(); } catch (e) {}
+                    }
+                    window.YTM.UI.error(`Falha persistente no lote ${batchNum}/${tot} (HTTP ${batchInfo.status}). Ordenação abortada para evitar bagunçar a playlist. Aguarde alguns minutos e tente novamente.`);
+                    return;
+                }
+
+                await new Promise(r => setTimeout(r, window.YTM.config.DELAY_BATCH));
             }
-            
+            diag.batches.push(batchInfo);
             await window.YTM.Common.yield();
         }
-        window.YTM.UI.success();
+        window.YTM.UI.success(falhas);
     }
 
     // =========================================================
@@ -253,13 +292,30 @@
 
     async function iniciarProcesso(modes, isReverse, creds) {
         try {
-            isCancelled = false; 
+            isCancelled = false;
             window.YTM.Queue.clear();
             window.YTM.UI.send('UI_START');
-            
+
+            const diag = {
+                version: 'v2.1.0',
+                ts: new Date().toISOString(),
+                modes, isReverse,
+                metaTotal: null,
+                domCount: null,
+                contentsCount: null,
+                listaCount: null,
+                rendererOrphans: [],
+                domOnlyOrphans: [],
+                listaSample: { primeiros: [], ultimos: [] },
+                sortedSample: { primeiros: [], ultimos: [] },
+                batches: [],
+                topId: null
+            };
+            if (window.YTM.debugMode) window.YTM._sortDiag = diag;
+            log(`[YTM-DIAG] ===== INÍCIO ${diag.version} ===== modes=${JSON.stringify(modes)} reverse=${isReverse}`);
+
             const scrollResult = await realizarScrollCompleto();
             if (scrollResult === -1) {
-                // Erro ou cancelamento — a mensagem já foi exibida pelo scroller
                 if (isCancelled) window.YTM.UI.send('UI_STOPPED');
                 return;
             }
@@ -274,12 +330,14 @@
                 .map(window.YTM.Parser.extrairDadosBasicos)
                 .filter(m => m !== null);
 
-            // Verificação de integridade
             const domCount = getLoadedCount();
-            console.log(`[YTM] Dados extraídos: ${lista.length} (DOM: ${domCount})`);
-            
+            diag.metaTotal = window.YTM.Parser.getTotalPlaylistCount();
+            diag.contentsCount = renderer.data.contents.length;
+            diag.domCount = domCount;
+            log(`[YTM-DIAG] meta=${diag.metaTotal}  contents=${diag.contentsCount}  dom=${domCount}  lista(pré)=${lista.length}`);
+
             if (lista.length < domCount) {
-                console.warn(`[YTM] Data model incompleto (${lista.length} vs DOM ${domCount}). Re-sync...`);
+                warn(`[YTM] Data model incompleto (${lista.length} vs DOM ${domCount}). Re-sync...`);
                 await new Promise(r => setTimeout(r, 1500));
                 if (renderer.data?.contents) {
                     lista = renderer.data.contents
@@ -287,12 +345,64 @@
                         .filter(i => i && i.playlistItemData)
                         .map(window.YTM.Parser.extrairDadosBasicos)
                         .filter(m => m !== null);
-                    console.log(`[YTM] Re-sync: ${lista.length} itens`);
+                    diag.contentsCount = renderer.data.contents.length;
+                    log(`[YTM-DIAG] Re-sync: contents=${diag.contentsCount}  lista=${lista.length}`);
                 }
             }
+            diag.listaCount = lista.length;
 
             if (lista.length === 0) return window.YTM.UI.error("Vazia.");
             const topId = lista[0].id;
+            diag.topId = topId;
+
+            // ÓRFÃOS — duas fontes:
+            // (1) renderer.data.contents: itens com playlistItemData mas que falharam no parser.
+            // (2) DOM: itens renderizados mas ausentes de renderer.data.contents
+            //     (caso de timing do lit-element ou virtualização).
+            const seenIds = new Set(lista.map(m => m.id));
+            const orfaos = [];
+
+            // (1) órfãos via renderer.data.contents
+            for (const c of renderer.data.contents) {
+                const it = c?.musicResponsiveListItemRenderer;
+                if (!it || !it.playlistItemData) continue;
+                const id = it.playlistItemData.playlistSetVideoId;
+                if (!id || seenIds.has(id)) continue;
+                seenIds.add(id);
+                const tituloHint = it?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || '?';
+                const artistaHint = it?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || '?';
+                const o = { id, videoId: it.playlistItemData.videoId, isOrphan: true, source: 'renderer', titulo: tituloHint, artista: artistaHint };
+                orfaos.push(o);
+                diag.rendererOrphans.push(o);
+            }
+
+            // (2) órfãos só no DOM
+            const domNodes = Array.from(document.querySelectorAll('ytmusic-responsive-list-item-renderer'));
+            for (const node of domNodes) {
+                try {
+                    const data = node.data || node.__data;
+                    const pid = data?.playlistItemData;
+                    if (!pid?.playlistSetVideoId) continue;
+                    if (seenIds.has(pid.playlistSetVideoId)) continue;
+                    const tituloHint = data?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text
+                        || node.querySelector('.title')?.textContent?.trim()
+                        || '?';
+                    const artistaHint = data?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || '?';
+                    seenIds.add(pid.playlistSetVideoId);
+                    const o = { id: pid.playlistSetVideoId, videoId: pid.videoId, isOrphan: true, source: 'dom-only', titulo: tituloHint, artista: artistaHint };
+                    orfaos.push(o);
+                    diag.domOnlyOrphans.push(o);
+                } catch (e) { /* skip */ }
+            }
+
+            log(`[YTM-DIAG] Órfãos: total=${orfaos.length}  via-renderer=${diag.rendererOrphans.length}  via-dom=${diag.domOnlyOrphans.length}`);
+            if (orfaos.length > 0) {
+                warn(`[YTM-DIAG] Órfãos detalhados:`);
+                orfaos.forEach(o => warn(`   [${o.source}] "${o.titulo}" — ${o.artista}  (setVideoId=${o.id})`));
+            }
+
+            diag.listaSample.primeiros = lista.slice(0, 3).map(m => `"${m.titulo}" — ${m.artista}`);
+            diag.listaSample.ultimos = lista.slice(-3).map(m => `"${m.titulo}" — ${m.artista}`);
 
             let realModes = new Set();
             let fusionId = null;
@@ -322,16 +432,29 @@
             if (isCancelled) { window.YTM.UI.send('UI_STOPPED'); return; }
 
             window.YTM.UI.update("Ordenando...", "Calculando nova ordem...");
-            
+
             if (fusionId) {
                 lista = sortFusedGroup(lista, fusionId);
             } else {
                 lista = sortMultilevel(lista, modes);
             }
 
+            diag.sortedSample.primeiros = lista.slice(0, 5).map(m => `"${m.titulo}" — ${m.artista}`);
+            diag.sortedSample.ultimos = lista.slice(-5).map(m => `"${m.titulo}" — ${m.artista}`);
+            log(`[YTM-DIAG] Sort OK. Primeiros 5:`, diag.sortedSample.primeiros);
+            log(`[YTM-DIAG] Sort OK. Últimos 5:`, diag.sortedSample.ultimos);
+
+            // Anexa órfãos ao final do bloco ordenado.
+            if (orfaos.length > 0) {
+                lista = lista.concat(orfaos);
+                falhas += orfaos.length;
+                log(`[YTM-DIAG] +${orfaos.length} órfãos anexados ao fim. lista total = ${lista.length}`);
+            }
+
             if (!isReverse) lista.reverse();
 
-            await enviarParaYouTube(lista, topId, renderer.data.playlistId);
+            await enviarParaYouTube(lista, topId, renderer.data.playlistId, falhas);
+            log(`[YTM-DIAG] ===== FIM ===== Para exportar diagnóstico: window.YTM.debugMode = true e repita o sort.`);
 
         } catch (err) {
             console.error(err);

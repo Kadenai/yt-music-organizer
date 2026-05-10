@@ -5,7 +5,7 @@
     async function fetchUserScrobbles(musica, key, user) {
         if (!key || !user) return 0;
         try {
-            const url = `https://ws.audioscrobbler.com/2.0/?method=track.getInfo&api_key=${key}&username=${user}&artist=${encodeURIComponent(musica.artista)}&track=${encodeURIComponent(musica.titulo)}&format=json&autocorrect=1`;
+            const url = `https://ws.audioscrobbler.com/2.0/?method=track.getInfo&api_key=${key}&username=${user}&artist=${encodeURIComponent(musica.artistaOriginal || musica.artista)}&track=${encodeURIComponent(musica.tituloOriginal || musica.titulo)}&format=json&autocorrect=1`;
             const r = await fetch(url);
             const j = await r.json();
             if (j.track && j.track.userplaycount) return parseInt(j.track.userplaycount);
