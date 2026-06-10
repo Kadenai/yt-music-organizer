@@ -10,7 +10,8 @@
             
             // Função de Comparação
             compare: (a, b) => {
-                return a.titulo.localeCompare(b.titulo);
+                // numeric: "Track 2" antes de "Track 10" (ordem natural de números)
+                return a.titulo.localeCompare(b.titulo, undefined, { numeric: true, sensitivity: 'base' });
             }
         };
         

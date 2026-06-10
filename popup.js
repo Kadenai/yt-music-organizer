@@ -21,6 +21,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('txt-bug').textContent = t('bug');
         document.getElementById('lastfm-key').placeholder = t('phKey');
         document.getElementById('lastfm-user').placeholder = t('phUser');
+        document.getElementById('txt-cache-title').textContent = t('cacheTitle');
+        document.getElementById('txt-cache-desc').textContent = t('cacheDesc');
+        document.getElementById('btn-clear-cache').textContent = t('btnClearCache');
     }
 
     // Load saved settings
@@ -39,6 +42,24 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // Limpa o cache de metadados (vive no localStorage da aba do YT Music,
+    // então só funciona com uma aba do YouTube Music ativa)
+    document.getElementById('btn-clear-cache').addEventListener('click', () => {
+        const cacheStatus = document.getElementById('cache-status');
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            const tab = tabs[0];
+            if (tab && tab.url && tab.url.includes('music.youtube.com')) {
+                chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_CACHE' }).catch(() => {});
+                cacheStatus.textContent = t('cacheCleared');
+                cacheStatus.style.color = "#4bb71b";
+            } else {
+                cacheStatus.textContent = t('cacheClearTab');
+                cacheStatus.style.color = "#e6a23c";
+            }
+            setTimeout(() => cacheStatus.textContent = "", 3000);
+        });
+    });
 
     checkWarn.addEventListener('change', () => {
         chrome.storage.sync.set({ showWarning: checkWarn.checked });

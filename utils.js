@@ -2,6 +2,9 @@
 
 window.YTM = window.YTM || {};
 window.YTM.debugMode = false;
+// Bandeira global de cancelamento: visível para os sorters (o botão Parar
+// precisa interromper também a fase de enriquecimento, não só o main.js).
+window.YTM.cancelled = false;
 
 window.YTM.config = {
     BATCH_SIZE: 50,
@@ -27,10 +30,28 @@ window.YTM.Cache = {
         } catch (e) { return null; }
     },
     set: (key, data) => {
+        const expiry = Date.now() + (window.YTM.config.CACHE_TTL_HOURS * 60 * 60 * 1000);
+        const record = JSON.stringify({ data, expiry });
         try {
-            const expiry = Date.now() + (window.YTM.config.CACHE_TTL_HOURS * 60 * 60 * 1000);
-            localStorage.setItem(window.YTM.Cache.prefix + key, JSON.stringify({ data, expiry }));
-        } catch (e) { window.YTM.Cache.clearAll(); }
+            localStorage.setItem(window.YTM.Cache.prefix + key, record);
+        } catch (e) {
+            // Sem espaço: remove só as entradas mais antigas (em vez de apagar tudo)
+            // e tenta uma vez mais. Se ainda falhar, desiste desta entrada.
+            window.YTM.Cache.evictOldest(40);
+            try { localStorage.setItem(window.YTM.Cache.prefix + key, record); } catch (e2) {}
+        }
+    },
+    evictOldest: (n) => {
+        const entries = [];
+        Object.keys(localStorage).forEach(k => {
+            if (!k.startsWith(window.YTM.Cache.prefix)) return;
+            try {
+                const parsed = JSON.parse(localStorage.getItem(k));
+                entries.push({ k, expiry: parsed.expiry || 0 });
+            } catch (e) { entries.push({ k, expiry: 0 }); }
+        });
+        entries.sort((a, b) => a.expiry - b.expiry);
+        entries.slice(0, n).forEach(e => localStorage.removeItem(e.k));
     },
     clearAll: () => {
         Object.keys(localStorage).forEach(k => { if(k.startsWith(window.YTM.Cache.prefix)) localStorage.removeItem(k); });
@@ -54,18 +75,33 @@ window.YTM.Queue = {
             setTimeout(window.YTM.Queue.next, 5);
         });
     },
-    clear: () => { window.YTM.Queue.queue = []; }
+    clear: () => {
+        // Resolve as tarefas pendentes com null (= "sem resultado") em vez de
+        // descartá-las: promises órfãs nunca resolveriam e quem espera por elas
+        // (Promise.all dos enriquecimentos) ficaria travado para sempre.
+        window.YTM.Queue.queue.forEach(item => { try { item.resolve(null); } catch (e) {} });
+        window.YTM.Queue.queue = [];
+    }
 };
 
 window.YTM.Common = {
     yield: () => new Promise(resolve => setTimeout(resolve, 0)),
     cleanText: (text) => text ? text.toLowerCase().replace(/\(official video\)/g, '').replace(/\(lyrics\)/g, '').trim() : "",
+    // Converte letras acentuadas para a forma base ("ção" → "cao", "É" → "E").
+    stripDiacritics: (text) => text ? text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC') : "",
     createCanonicalId: (text) => {
         if (!text) return "";
         let clean = window.YTM.Common.cleanText(text);
         clean = clean.split(/\s(?:feat\.|ft\.|part\.|with)\s/)[0];
-        return clean.replace(/[^a-z0-9]/g, '');
+        clean = window.YTM.Common.stripDiacritics(clean);
+        // Mantém letras e números de QUALQUER alfabeto (coreano, japonês, cirílico...).
+        // Antes só sobrevivia a-z0-9, e títulos não-latinos viravam identidade vazia
+        // — que "casava" com qualquer faixa errada.
+        return clean.replace(/[^\p{L}\p{N}]/gu, '');
     },
+    // Normaliza um texto para servir de chave de cache, preservando letras de
+    // qualquer alfabeto (evita que "Pé" e "Pó" colidam na mesma chave).
+    cacheKey: (raw) => window.YTM.Common.stripDiacritics(String(raw).toLowerCase()).replace(/[^\p{L}\p{N}]/gu, '_'),
     parseDuration: (text) => {
         if (!text) return 0;
         const parts = text.split(':').map(Number);

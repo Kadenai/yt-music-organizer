@@ -77,11 +77,20 @@ if (typeof chrome !== "undefined" && chrome.storage) {
             window.LASTFM_CREDS = { key: req.key, user: req.user };
             if (document.getElementById('ytm-confirm-modal').style.display === 'flex') renderBuilder();
         }
+        if (req.type === 'CLEAR_CACHE') {
+            // O cache de metadados vive no localStorage da página (compartilhado
+            // com o content script). Permite ao usuário descartar dados errados.
+            Object.keys(localStorage).forEach(k => {
+                if (k.startsWith('YTM_ORG_V1_')) localStorage.removeItem(k);
+            });
+        }
     });
 }
 
 function injetarTodosScripts() {
-    const scripts = ["utils.js", "sorters/title.js", "sorters/artist.js", "sorters/duration.js", "sorters/popularity.js", "sorters/scrobbles.js", "sorters/album.js", "main.js"];
+    // i18n.js primeiro: o motor (main.js/sorters) usa as traduções para as
+    // mensagens de progresso e erro, que antes eram fixas em português.
+    const scripts = ["i18n.js", "utils.js", "sorters/title.js", "sorters/artist.js", "sorters/duration.js", "sorters/popularity.js", "sorters/scrobbles.js", "sorters/album.js", "main.js"];
     function carregarProximo(index) {
         if (index >= scripts.length) return;
         const s = document.createElement('script');
@@ -463,7 +472,21 @@ function atualizarTexto(titulo, subtitulo) {
 }
 
 function mostrarSucesso(d) {
-    window.location.reload();
+    // Mostra o resultado (inclusive quantas músicas ficaram sem dados e foram
+    // colocadas no final) antes de recarregar — antes esse número era descartado.
+    const falhas = (d && d.falhas) || 0;
+    const spinner = document.getElementById('ytm-loading-icon');
+    if (spinner) spinner.style.display = 'none';
+    const btnStop = document.querySelector('.stop-btn');
+    if (btnStop) btnStop.style.display = 'none';
+
+    if (falhas > 0) {
+        atualizarTexto(t('statusDone'), t('doneFails').replace('{n}', falhas));
+        setTimeout(() => window.location.reload(), 4000);
+    } else {
+        atualizarTexto(t('statusDone'), t('doneAll'));
+        setTimeout(() => window.location.reload(), 1500);
+    }
 }
 
 document.addEventListener('keydown', (e) => {

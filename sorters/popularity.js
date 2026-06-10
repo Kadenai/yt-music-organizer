@@ -2,6 +2,8 @@
 
 (function() {
 
+    const t = (key) => (window.I18N && window.I18N.t) ? window.I18N.t(key) : key;
+
     // ==========================================
     // NORMALIZAÇÃO DE TÍTULO (P1 + P9)
     // ==========================================
@@ -16,8 +18,10 @@
         clean = clean.split(/\s*\/\s*/)[0];
         // 4. Remove feats
         clean = clean.split(/\s(?:feat\.|ft\.|part\.|with)\s/)[0];
-        // 5. Strip non-alphanumeric
-        return clean.replace(/[^a-z0-9]/g, '');
+        // 5. Acentos viram letra base; mantém letras/números de qualquer alfabeto
+        //    (títulos em coreano/japonês/cirílico não viram identidade vazia).
+        clean = window.YTM.Common.stripDiacritics(clean);
+        return clean.replace(/[^\p{L}\p{N}]/gu, '');
     }
 
     // ==========================================
@@ -63,8 +67,11 @@
     // FUZZY MATCHING — 3 Níveis (P2)
     // ==========================================
     function findBestMatch(canonicalLocal, topList) {
+        // Identidade vazia casaria com qualquer coisa — nunca usar para match.
+        if (!canonicalLocal) return null;
+
         // Nível 1: Match exato
-        const exact = topList.find(t => t.canonical === canonicalLocal);
+        const exact = topList.find(t => t.canonical && t.canonical === canonicalLocal);
         if (exact) return exact;
 
         // Nível 2: Um contém o outro (nomes truncados/estendidos)
@@ -103,7 +110,7 @@
     // API 1: Last.fm Top Tracks (COM CACHE — P5)
     // ==========================================
     async function fetchArtistTopTracks(artistName, apiKey) {
-        const cacheKey = `LASTFM_TOP_${artistName}`.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        const cacheKey = 'LASTFM_TOP_' + window.YTM.Common.cacheKey(artistName);
         
         // 1. Tenta cache local (instantâneo)
         const cached = window.YTM.Cache.get(cacheKey);
@@ -159,7 +166,7 @@
     // API 1b: Last.fm Track Info — Fallback pontual (P8)
     // ==========================================
     async function fetchTrackInfo(artistName, trackName, apiKey) {
-        const cacheKey = `LASTFM_TRACK_${artistName}_${trackName}`.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        const cacheKey = 'LASTFM_TRACK_' + window.YTM.Common.cacheKey(`${artistName}_${trackName}`);
         
         const cached = window.YTM.Cache.get(cacheKey);
         if (cached) return cached;
@@ -202,13 +209,29 @@
                 if (json.videoDetails && json.videoDetails.viewCount) {
                     return parseInt(json.videoDetails.viewCount, 10);
                 }
-                return 0;
-            } catch (e) { 
+                // Sem viewCount = vídeo restrito/indisponível. É "desconhecido" (-1),
+                // não "0 views" — senão a música afundaria como impopular (e o 0
+                // ainda ficava 72h no cache).
+                return -1;
+            } catch (e) {
                 // Network error — retry
                 await new Promise(r => setTimeout(r, 1000));
             }
         }
         return -1; // Sinaliza falha após todas as tentativas
+    }
+
+    // ==========================================
+    // VALIDAÇÃO DA CHAVE LAST.FM
+    // ==========================================
+    // Uma chamada barata antes de processar tudo: com chave inválida, o processo
+    // inteiro rodava "com sucesso" sem mudar nada e sem explicar o porquê.
+    async function chaveLastFmValida(apiKey) {
+        try {
+            const url = `https://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=cher&api_key=${apiKey}&format=json`;
+            const json = await (await fetch(url)).json();
+            return !(json.error === 10 || json.error === 26); // 10 = chave inválida, 26 = suspensa
+        } catch (e) { return true; } // erro de rede não prova nada — segue o fluxo
     }
 
     // ==========================================
@@ -226,42 +249,58 @@
                 if (hasKey) {
                     // --- MODO LAST.FM (TOP 1000 TRACKS + FALLBACK) ---
 
+                    // Chave inválida: avisa e aborta em vez de "concluir" sem fazer nada.
+                    if (!(await chaveLastFmValida(creds.key))) {
+                        window.YTM.UI.error(t('errBadKey'));
+                        const e = new Error("Invalid Last.fm API key");
+                        e.handled = true;
+                        throw e;
+                    }
+
                     // P3: Normalizar artistas ANTES de deduplificar
                     const artistasUnicos = [...new Set(
                         listaMusicas.map(m => normalizeArtist(m.artistaOriginal || m.artista))
                     )];
 
-                    // 1. Busca Top 1000 Tracks de cada artista (COM CACHE — P5)
-                    for (let i = 0; i < artistasUnicos.length; i++) {
-                        const artista = artistasUnicos[i];
-                        window.YTM.UI.update("Last.fm...", `Analisando artista: ${artista} (${i+1}/${artistasUnicos.length})`);
-                        cacheTopTracks[artista] = await fetchArtistTopTracks(artista, creds.key);
-                        // Pequeno delay para rate limit
-                        await new Promise(r => setTimeout(r, 200));
-                    }
+                    // 1. Busca Top 1000 Tracks de cada artista em PARALELO controlado
+                    //    (a Fila limita as chamadas simultâneas; cache continua valendo).
+                    let analisados = 0;
+                    await Promise.all(artistasUnicos.map(artista =>
+                        window.YTM.Queue.add(async () => {
+                            if (window.YTM.cancelled) return;
+                            cacheTopTracks[artista] = await fetchArtistTopTracks(artista, creds.key);
+                            // Pequeno delay para respeitar o rate limit do Last.fm
+                            await new Promise(r => setTimeout(r, 300));
+                            analisados++;
+                            window.YTM.UI.update("Last.fm", `${analisados}/${artistasUnicos.length}`);
+                        })
+                    ));
+
+                    if (window.YTM.cancelled) return falhas;
 
                     // 2. Associa dados às músicas com FUZZY MATCHING (P2)
                     for (let musica of listaMusicas) {
+                        if (window.YTM.cancelled) return falhas;
                         const artista = normalizeArtist(musica.artistaOriginal || musica.artista);
                         const topList = cacheTopTracks[artista] || [];
                         const canonicalLocal = normalizeTitle(musica.tituloOriginal || musica.titulo);
-                        
+
                         // Tenta encontrar via matching em 3 níveis (P2)
                         const match = findBestMatch(canonicalLocal, topList);
-                        
+
                         if (match) {
                             musica.views = match.listeners;
                             musica.source = "Last.fm Top 1000";
                         } else {
                             // P8: Fallback pontual via track.getInfo
-                            window.YTM.UI.update("Last.fm...", `Buscando: ${musica.tituloOriginal || musica.titulo}`);
+                            window.YTM.UI.update("Last.fm", `${t('statusSearching')} ${musica.tituloOriginal || musica.titulo}`);
                             const trackInfo = await fetchTrackInfo(
-                                artista, 
-                                musica.tituloOriginal || musica.titulo, 
+                                artista,
+                                musica.tituloOriginal || musica.titulo,
                                 creds.key
                             );
                             await new Promise(r => setTimeout(r, 150));
-                            
+
                             if (trackInfo) {
                                 musica.views = trackInfo.listeners;
                                 musica.source = "Last.fm Track Info";
@@ -277,42 +316,42 @@
                     // --- MODO YOUTUBE (P6 + P11: Queue + Cache + Retry) ---
                     const client = window.YTM.Auth.getClientInfo();
                     if (!client) return falhas;
-                    
+
                     const url = `https://music.youtube.com/youtubei/v1/player?key=${client.apiKey}`;
                     let processados = 0;
-                    
-                    // P11: Processa via Queue centralizada com Cache
-                    for (let i = 0; i < listaMusicas.length; i++) {
-                        const m = listaMusicas[i];
-                        
-                        if (!m.videoId) { m.views = 0; processados++; continue; }
 
-                        // P11: Cache por videoId
+                    // P11: Em PARALELO controlado pela Queue, com cache por videoId
+                    await Promise.all(listaMusicas.map(async (m) => {
+                        if (window.YTM.cancelled) return;
+
+                        if (!m.videoId) { m.views = 0; processados++; return; }
+
                         const cacheKey = `YT_VIEWS_${m.videoId}`;
                         const cached = window.YTM.Cache.get(cacheKey);
-                        if (cached !== null) { 
-                            m.views = cached; 
-                            processados++; 
-                            continue; 
+                        if (cached !== null) {
+                            m.views = cached;
+                            processados++;
+                            return;
                         }
 
                         // P6 + P11: Usa Queue para throttling + retry com backoff
-                        m.views = await window.YTM.Queue.add(
+                        const v = await window.YTM.Queue.add(
                             () => buscarViewsYouTube(m, url, client.context, 3)
                         );
-                        
-                        // Cache o resultado (mesmo 0, para não re-buscar)
+                        // null = fila cancelada pelo botão Parar
+                        m.views = (v === null || v === undefined) ? -1 : v;
+
                         if (m.views >= 0) {
                             window.YTM.Cache.set(cacheKey, m.views);
                         } else {
-                            falhas++; // -1 = falha total
+                            falhas++; // -1 = desconhecido (vai para o fim)
                         }
-                        
+
                         processados++;
                         if (processados % 10 === 0) {
-                            window.YTM.UI.update("YouTube Views...", `${processados}/${listaMusicas.length}`);
+                            window.YTM.UI.update(t('statusViews'), `${processados}/${listaMusicas.length}`);
                         }
-                    }
+                    }));
                 }
 
                 // ===============================================

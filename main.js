@@ -6,6 +6,8 @@
 
     const log = (...a) => window.YTM?.debugMode && console.log(...a);
     const warn = (...a) => window.YTM?.debugMode && console.warn(...a);
+    // Tradução no contexto da página (i18n.js é injetado antes deste arquivo).
+    const t = (key) => (window.I18N && window.I18N.t) ? window.I18N.t(key) : key;
 
     const FUSION_STRATEGIES = {
         'FUS_FAV_ALBUMS': { type: 'GROUP_BY_ALBUM', scoreFn: (t) => t.reduce((s, x) => s + (Number(x.userPlays)||0), 0), descending: true },
@@ -59,10 +61,10 @@
 
         groupList.sort((a, b) => {
             if (strategy.specialSort === 'DISCOGRAPHY') {
-                const artA = a.artistName.toLowerCase();
-                const artB = b.artistName.toLowerCase();
-                if (artA < artB) return -1;
-                if (artA > artB) return 1;
+                // localeCompare entende acentos ("Ângela" fica junto do A);
+                // comparar com < > jogaria artistas acentuados para depois do Z.
+                const artCmp = a.artistName.localeCompare(b.artistName, undefined, { sensitivity: 'base' });
+                if (artCmp !== 0) return artCmp;
                 if (a.year !== b.year) return a.year - b.year;
                 return a.albumName.localeCompare(b.albumName);
             }
@@ -146,15 +148,14 @@
     }
 
     async function realizarScrollCompleto() {
+        // Total anunciado no cabeçalho: em idiomas não mapeados pode vir null.
+        // Ele NÃO é mais obrigatório — o sinal de término independente de idioma
+        // é a ausência de continuationItemRenderer (nada mais a carregar).
         const metaTotal = window.YTM.Parser.getTotalPlaylistCount();
+        const metaLabel = metaTotal || "?";
 
-        if (!metaTotal) {
-            window.YTM.UI.error("Não foi possível identificar o total de músicas da playlist.");
-            return -1;
-        }
-
-        log(`[YTM] Scroll v6: Preciso carregar ${metaTotal} itens.`);
-        window.YTM.UI.update("Carregando...", `0 / ${metaTotal} itens...`);
+        log(`[YTM] Scroll v7: meta do cabeçalho = ${metaLabel}.`);
+        window.YTM.UI.update(t('statusLoading'), `0 / ${metaLabel}`);
 
         const TIMEOUT_MS = 5 * 60 * 1000;
         const inicio = Date.now();
@@ -165,15 +166,33 @@
 
             const currentCount = getLoadedCount();
             const continuacao = temContinuacaoPendente();
-            window.YTM.UI.update("Carregando...", `${currentCount} / ${metaTotal} itens...`);
+            window.YTM.UI.update(t('statusLoading'), `${currentCount} / ${metaLabel}`);
 
-            if (currentCount >= metaTotal && !continuacao) {
+            if (metaTotal && currentCount >= metaTotal && !continuacao) {
                 log(`[YTM] ✅ Todas as ${metaTotal} músicas carregadas (sem continuação pendente)!`);
                 return currentCount;
             }
 
+            if (!continuacao) {
+                // O YT Music não anuncia mais nada para carregar. Confirma que a
+                // contagem está estável (dá tempo de a página renderizar) e encerra.
+                // Cobre dois casos: idioma sem meta legível, e playlists cuja meta
+                // nunca bate por conter faixas indisponíveis.
+                const espera = currentCount === 0 ? 8000 : 3000;
+                const cresceu = await esperarNovoConteudo(currentCount, espera);
+                if (!cresceu && !temContinuacaoPendente()) {
+                    const finalCount = getLoadedCount();
+                    if (metaTotal && finalCount < metaTotal) {
+                        warn(`[YTM] Carregou ${finalCount} de ${metaTotal} anunciados (faixas indisponíveis?). Prosseguindo com o que existe.`);
+                    }
+                    log(`[YTM] ✅ Fim do carregamento: ${finalCount} itens, sem continuação pendente.`);
+                    return finalCount;
+                }
+                continue;
+            }
+
             if (Date.now() - inicio > TIMEOUT_MS) {
-                window.YTM.UI.error(`Timeout: só carregou ${currentCount} de ${metaTotal} músicas.`);
+                window.YTM.UI.error(t('errTimeout').replace('{x}', currentCount).replace('{y}', metaLabel));
                 return -1;
             }
 
@@ -202,7 +221,7 @@
                     await new Promise(r => setTimeout(r, 3000));
                 }
 
-                if (semProgressoConsecutivo > 3) {
+                if (semProgressoConsecutivo > 3 && items.length > 0) {
                     items[items.length - 1].scrollIntoView({ behavior: 'instant', block: 'start' });
                     await new Promise(r => setTimeout(r, 3000));
                 }
@@ -217,7 +236,7 @@
     async function enviarParaYouTube(lista, topId, pid, falhas) {
         const client = window.YTM.Auth.getClientInfo();
         const ah = await window.YTM.Auth.generateHeader();
-        if(!ah) return window.YTM.UI.error("Auth Error");
+        if(!ah) return window.YTM.UI.error(t('errAuth'));
 
         const diag = window.YTM._sortDiag || { batches: [] };
         let t = topId;
@@ -228,7 +247,7 @@
 
             const ch = lista.slice(i, i+window.YTM.config.BATCH_SIZE);
             const batchNum = Math.floor(i/window.YTM.config.BATCH_SIZE)+1;
-            window.YTM.UI.update("Salvando...", `Lote ${batchNum}/${tot}`);
+            window.YTM.UI.update(t('statusSaving'), `${batchNum}/${tot}`);
 
             let acts = [];
             const skipped = [];
@@ -274,7 +293,7 @@
                     if (window.YTM.debugMode) {
                         try { window.YTM.exportarSortLogs(); } catch (e) {}
                     }
-                    window.YTM.UI.error(`Falha persistente no lote ${batchNum}/${tot} (HTTP ${batchInfo.status}). Ordenação abortada para evitar bagunçar a playlist. Aguarde alguns minutos e tente novamente.`);
+                    window.YTM.UI.error(t('errBatch').replace('{n}', batchNum).replace('{t}', tot) + ` (HTTP ${batchInfo.status})`);
                     return;
                 }
 
@@ -293,6 +312,7 @@
     async function iniciarProcesso(modes, isReverse, creds) {
         try {
             isCancelled = false;
+            window.YTM.cancelled = false;
             window.YTM.Queue.clear();
             window.YTM.UI.send('UI_START');
 
@@ -320,9 +340,9 @@
                 return;
             }
 
-            window.YTM.UI.update("Lendo...", "Processando lista...");
+            window.YTM.UI.update(t('statusReading'), t('statusProcessing'));
             const renderer = document.querySelector('ytmusic-playlist-shelf-renderer');
-            if (!renderer?.data) return window.YTM.UI.error("Erro F5.");
+            if (!renderer?.data) return window.YTM.UI.error(t('errF5'));
 
             let lista = renderer.data.contents
                 .map(i => i.musicResponsiveListItemRenderer)
@@ -351,7 +371,7 @@
             }
             diag.listaCount = lista.length;
 
-            if (lista.length === 0) return window.YTM.UI.error("Vazia.");
+            if (lista.length === 0) return window.YTM.UI.error(t('errEmpty'));
             const topId = lista[0].id;
             diag.topId = topId;
 
@@ -431,7 +451,7 @@
 
             if (isCancelled) { window.YTM.UI.send('UI_STOPPED'); return; }
 
-            window.YTM.UI.update("Ordenando...", "Calculando nova ordem...");
+            window.YTM.UI.update(t('statusSorting'), t('statusCalc'));
 
             if (fusionId) {
                 lista = sortFusedGroup(lista, fusionId);
@@ -444,21 +464,24 @@
             log(`[YTM-DIAG] Sort OK. Primeiros 5:`, diag.sortedSample.primeiros);
             log(`[YTM-DIAG] Sort OK. Últimos 5:`, diag.sortedSample.ultimos);
 
-            // Anexa órfãos ao final do bloco ordenado.
-            if (orfaos.length > 0) {
-                lista = lista.concat(orfaos);
-                falhas += orfaos.length;
-                log(`[YTM-DIAG] +${orfaos.length} órfãos anexados ao fim. lista total = ${lista.length}`);
-            }
-
             if (!isReverse) lista.reverse();
+
+            // Anexa órfãos DEPOIS de decidir a direção: o envio constrói a playlist
+            // na ordem inversa da iteração, então prefixá-los aqui os coloca no FIM
+            // da playlist final — tanto no modo normal quanto no inverso.
+            if (orfaos.length > 0) {
+                lista = orfaos.slice().reverse().concat(lista);
+                falhas += orfaos.length;
+                log(`[YTM-DIAG] +${orfaos.length} órfãos anexados ao fim da playlist. lista total = ${lista.length}`);
+            }
 
             await enviarParaYouTube(lista, topId, renderer.data.playlistId, falhas);
             log(`[YTM-DIAG] ===== FIM ===== Para exportar diagnóstico: window.YTM.debugMode = true e repita o sort.`);
 
         } catch (err) {
             console.error(err);
-            window.YTM.UI.error("Erro: " + err.message);
+            // Erros já comunicados ao usuário (err.handled) não geram segundo alerta.
+            if (!err.handled) window.YTM.UI.error("Erro: " + err.message);
         }
     }
 
@@ -469,6 +492,7 @@
         }
         if (ev.data && ev.data.type === "CMD_STOP_SORT") {
             isCancelled = true;
+            window.YTM.cancelled = true; // sinaliza também para os loops dos sorters
             window.YTM.Queue.clear();
         }
     });

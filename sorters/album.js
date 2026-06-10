@@ -1,13 +1,17 @@
 // sorters/album.js - Versão 8.0 (Performance Engine: Cache + Queue)
 
 (function() {
-    
-    // --- HELPER DE LIMPEZA (Mantido igual) ---
+
+    const t = (key) => (window.I18N && window.I18N.t) ? window.I18N.t(key) : key;
+
+    // --- HELPER DE LIMPEZA ---
     function cleanAlbumTitle(title) {
         if (!title) return "";
+        // Flag 'g' (global): a antiga 'y' (sticky) só casava se o título COMEÇASSE
+        // com "(", então "(Deluxe Edition)" etc. nunca era removido de verdade.
         return title
-            .replace(/\s*\(.*?(remaster|deluxe|anniversary|edition|expanded|re-recorded|version).*\)/yi, '')
-            .replace(/\s*\[.*?(remaster|deluxe|anniversary|edition|expanded|re-recorded|version).*\]/yi, '')
+            .replace(/\s*\(.*?(remaster|deluxe|anniversary|edition|expanded|re-recorded|version).*\)/gi, '')
+            .replace(/\s*\[.*?(remaster|deluxe|anniversary|edition|expanded|re-recorded|version).*\]/gi, '')
             .replace(/\s-\s(EP|Single|Remaster).*$/i, '')
             .trim();
     }
@@ -28,16 +32,24 @@
                 );
 
                 if (candidates.length > 0) {
-                    // Ordenação de Prioridade (Track Count > Date)
+                    // Ordenação de Prioridade (Track Count > Date) — a edição com MAIS
+                    // faixas (deluxe etc.) tem o mapa de faixas mais completo.
                     candidates.sort((a, b) => {
-                        if (b.trackCount !== a.trackCount) return b.trackCount - a.trackCount; 
+                        if (b.trackCount !== a.trackCount) return b.trackCount - a.trackCount;
                         const da = a.releaseDate ? new Date(a.releaseDate).getFullYear() : 9999;
                         const db = b.releaseDate ? new Date(b.releaseDate).getFullYear() : 9999;
                         return da - db;
                     });
 
                     const bestMatch = candidates[0];
-                    const bestYear = bestMatch.releaseDate ? new Date(bestMatch.releaseDate).getFullYear() : 9999;
+
+                    // ANO: o MENOR ano entre as edições = lançamento original.
+                    // (Sem isso, a Deluxe de 2011 dava ano 2011 a um álbum de 1991
+                    // e quebrava a ordem cronológica da discografia.)
+                    const anos = candidates
+                        .map(c => c.releaseDate ? new Date(c.releaseDate).getFullYear() : null)
+                        .filter(y => y && y > 1900 && y < 2100);
+                    const bestYear = anos.length > 0 ? Math.min(...anos) : 9999;
 
                     // Busca faixas (Lookup)
                     const tracksUrl = `https://itunes.apple.com/lookup?id=${bestMatch.collectionId}&entity=song&limit=200`;
@@ -72,7 +84,7 @@
     // --- GERENCIADOR DE REQUISIÇÃO (Cache -> Queue -> API) ---
     async function getAlbumData(artist, albumNameRaw) {
         const albumName = cleanAlbumTitle(albumNameRaw);
-        const cacheKey = `ALBUM_${artist}|${albumName}`.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        const cacheKey = 'ALBUM_' + window.YTM.Common.cacheKey(`${artist}|${albumName}`);
         
         // 1. Tenta Cache Local (Instantâneo)
         const cached = window.YTM.Cache.get(cacheKey);
@@ -108,25 +120,36 @@
             if (json.recordings && json.recordings.length > 0) {
                 const rec = json.recordings[0];
                 if (rec.releases && rec.releases.length > 0) {
-                    
+
                     // Lógica do Auditor Anti-Single
                     const targetAlbumClean = cleanAlbumTitle(musica.albumOriginal || "");
-                    
+
+                    // O tipo REAL do lançamento vem em release-group (primary-type /
+                    // secondary-types). Procurar a palavra "single" no título quase
+                    // nunca funcionava — singles raramente se chamam "... Single".
+                    const scoreRelease = (r) => {
+                        let score = 0;
+                        const rg = r['release-group'] || {};
+                        const primary = rg['primary-type'] || '';
+                        const secondary = rg['secondary-types'] || [];
+                        if (primary === 'Album') score += 20;
+                        if (primary === 'Single') score -= 50;
+                        if (primary === 'EP') score -= 10;
+                        if (secondary.includes('Compilation')) score -= 30; // "Greatest Hits" etc.
+                        if (secondary.includes('Live')) score -= 15;
+                        // Heurística antiga mantida como reforço
+                        if (/single/i.test(r.title || '') || /single/i.test(r.disambiguation || '')) score -= 50;
+                        if (targetAlbumClean && (r.title || '').toLowerCase() === targetAlbumClean.toLowerCase()) score += 25;
+                        return score;
+                    };
+
                     const releases = rec.releases.sort((a, b) => {
-                        let scoreA = 0;
-                        let scoreB = 0;
-
-                        if (/single/i.test(a.title) || /single/i.test(a.disambiguation)) scoreA -= 50;
-                        if (/single/i.test(b.title) || /single/i.test(b.disambiguation)) scoreB -= 50;
-
-                        if (targetAlbumClean) {
-                            if (a.title.toLowerCase() === targetAlbumClean.toLowerCase()) scoreA += 20;
-                            if (b.title.toLowerCase() === targetAlbumClean.toLowerCase()) scoreB += 20;
-                        }
+                        const scoreA = scoreRelease(a);
+                        const scoreB = scoreRelease(b);
 
                         const da = a.date ? parseInt(a.date.substring(0,4)) : 9999;
                         const db = b.date ? parseInt(b.date.substring(0,4)) : 9999;
-                        
+
                         if (scoreA !== scoreB) return scoreB - scoreA;
                         return da - db;
                     });
@@ -151,7 +174,7 @@
     // Wrapper do MB para Fila + Cache
     async function getTrackDataMB(musica) {
         // Cache Key baseada em Artista + Música (MB é por faixa)
-        const cacheKey = `MB_TRACK_${musica.artista}|${musica.titulo}`.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        const cacheKey = 'MB_TRACK_' + window.YTM.Common.cacheKey(`${musica.artista}|${musica.titulo}`);
         
         const cached = window.YTM.Cache.get(cacheKey);
         if (cached) return cached;
@@ -169,47 +192,57 @@
             enrich: async (listaMusicas, creds) => {
                 let falhas = 0;
 
-                const albunsParaBuscar = {}; 
+                const albunsParaBuscar = {};
                 const musicasSemAlbum = [];
 
                 for (let m of listaMusicas) {
                     if (m.albumOriginal && m.albumOriginal.length > 1 && m.albumOriginal !== "Desconhecido") {
                         const key = `${m.artistaOriginal}|${m.albumOriginal}`;
-                        if (!albunsParaBuscar[key]) albunsParaBuscar[key] = [];
-                        albunsParaBuscar[key].push(m);
+                        // Guarda artista/álbum no objeto (e não na chave) — nomes com "|"
+                        // quebravam o split antigo.
+                        if (!albunsParaBuscar[key]) albunsParaBuscar[key] = { artist: m.artistaOriginal, albumNameRaw: m.albumOriginal, musicas: [] };
+                        albunsParaBuscar[key].musicas.push(m);
                     } else {
                         musicasSemAlbum.push(m);
                     }
                 }
 
-                const chaves = Object.keys(albunsParaBuscar);
-                
-                // Processamento em Lote (Agora gerenciado pela Queue)
-                for (let i = 0; i < chaves.length; i++) {
-                    const key = chaves[i];
-                    const [artist, albumNameRaw] = key.split('|');
-                    const grupoMusicas = albunsParaBuscar[key];
+                const grupos = Object.values(albunsParaBuscar);
+                let concluidos = 0;
 
-                    window.YTM.UI.update("Discografia...", `Processando: ${albumNameRaw} (${i+1}/${chaves.length})`);
+                // Busca os álbuns em PARALELO controlado: a Fila (Queue) limita as
+                // chamadas simultâneas. Antes era um por vez e a fila ficava ociosa.
+                await Promise.all(grupos.map(async (grupo) => {
+                    if (window.YTM.cancelled) return;
 
                     // Chama a função otimizada (Cache -> Queue -> API)
-                    const dadosAlbum = await getAlbumData(artist, albumNameRaw);
+                    const dadosAlbum = await getAlbumData(grupo.artist, grupo.albumNameRaw);
+                    concluidos++;
+                    window.YTM.UI.update(t('statusDisco'), `${concluidos}/${grupos.length}`);
+                    if (window.YTM.cancelled) return;
 
                     if (dadosAlbum) {
-                        for (let m of grupoMusicas) {
+                        for (let m of grupo.musicas) {
                             m.year = dadosAlbum.year;
                             m.album = dadosAlbum.name;
                             m.source = dadosAlbum.source;
-                            
-                            let trackInfo = dadosAlbum.map[m.canonical];
 
-                            if (!trackInfo && dadosAlbum.rawSongs) {
-                                const cleanTitleYTM = m.canonical;
-                                const resgate = dadosAlbum.rawSongs.find(s => 
-                                    s.cleanName.includes(cleanTitleYTM) || 
-                                    cleanTitleYTM.includes(s.cleanName)
-                                );
-                                if (resgate) trackInfo = { track: resgate.track, disc: resgate.disc };
+                            let trackInfo = null;
+                            if (m.canonical) {
+                                trackInfo = dadosAlbum.map[m.canonical];
+
+                                // Resgate por inclusão: exige identidades com tamanho
+                                // mínimo — identidade vazia/curta "está contida" em
+                                // qualquer texto e casava com a faixa errada.
+                                if (!trackInfo && dadosAlbum.rawSongs && m.canonical.length >= 3) {
+                                    const cleanTitleYTM = m.canonical;
+                                    const resgate = dadosAlbum.rawSongs.find(s =>
+                                        s.cleanName && s.cleanName.length >= 3 &&
+                                        (s.cleanName.includes(cleanTitleYTM) ||
+                                         cleanTitleYTM.includes(s.cleanName))
+                                    );
+                                    if (resgate) trackInfo = { track: resgate.track, disc: resgate.disc };
+                                }
                             }
 
                             if (trackInfo) {
@@ -221,25 +254,32 @@
                             }
                         }
                     } else {
-                        musicasSemAlbum.push(...grupoMusicas);
+                        musicasSemAlbum.push(...grupo.musicas);
                     }
-                    
-                    // Yield: Pausa para a UI respirar e processar botão Stop
-                    await window.YTM.Common.yield();
-                }
+                }));
 
-                // Processamento Individual (MusicBrainz)
+                if (window.YTM.cancelled) return falhas;
+
+                // Processamento Individual (MusicBrainz) — serial DE PROPÓSITO:
+                // o MusicBrainz limita a 1 requisição por segundo.
                 if (musicasSemAlbum.length > 0) {
                     for (let i = 0; i < musicasSemAlbum.length; i++) {
+                        if (window.YTM.cancelled) return falhas;
                         const m = musicasSemAlbum[i];
-                        window.YTM.UI.update("Auditando...", `${i+1}/${musicasSemAlbum.length}: ${m.titulo}`);
-                        
+                        window.YTM.UI.update(t('statusAudit'), `${i+1}/${musicasSemAlbum.length}: ${m.titulo}`);
+
                         const dados = await getTrackDataMB(m);
                         if (dados) {
                             Object.assign(m, dados);
+                        } else if (m.year !== 9999) {
+                            // O iTunes já achou o álbum e o ANO; só o nº da faixa ficou
+                            // desconhecido (999 = fim do álbum). Não rebaixar para
+                            // "Falha" — senão a música seria expulsa para o fim da
+                            // playlist mesmo com o ano correto.
+                            falhas++;
                         } else {
                             m.album = m.albumOriginal || "Desconhecido";
-                            m.source = "Falha"; 
+                            m.source = "Falha";
                             falhas++;
                         }
                         await window.YTM.Common.yield();

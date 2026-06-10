@@ -28,7 +28,7 @@ O recurso exclusivo desta extensão. Ao selecionar dois critérios compatíveis,
 
 🏆 Hall da Fama (Popularidade + Artista)
 
-Agrupa artistas. O artista com mais views somados toca primeiro (com toda sua discografia).
+Agrupa artistas. O artista com a melhor média de views por música toca primeiro (com toda sua discografia). A média evita que artistas com muitas músicas medianas passem na frente de quem tem hits gigantes.
 
 ❤️ Meu Top Artistas (Scrobbles + Artista)
 
@@ -52,7 +52,7 @@ Agrupa por Artista. Dentro do artista, os maiores sucessos tocam primeiro.
 
 🛠️ Como Funciona (Técnico)
 
-Injeção: A extensão injeta um script (logic.js) no contexto da página para acessar a API interna do YouTube (GAPI).
+Injeção: A extensão injeta scripts (main.js e os sorters) no contexto da página para acessar a API interna do YouTube (GAPI).
 
 Enriquecimento:
 
@@ -96,7 +96,7 @@ The unique feature of this extension. When you select two compatible criteria, t
 
 🏆 Hall of Fame (Popularity + Artist)
 
-Groups artists. The artist with the most total views plays first (with their full discography).
+Groups artists. The artist with the highest average views per song plays first (with their full discography). Using the average prevents artists with many mid-tier songs from outranking artists with massive hits.
 
 ❤️ My Top Artists (Scrobbles + Artist)
 
@@ -120,7 +120,7 @@ Groups by Artist. Within the band, their biggest hits play first.
 
 🛠️ How It Works (Technical)
 
-Injection: The extension injects a script (logic.js) into the page context to access YouTube's internal API (GAPI).
+Injection: The extension injects scripts (main.js and the sorters) into the page context to access YouTube's internal API (GAPI).
 
 Enrichment:
 
